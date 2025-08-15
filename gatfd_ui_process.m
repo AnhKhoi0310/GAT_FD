@@ -463,6 +463,98 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                     fnc_rawdata=niftiread(fnc_in_file);
                     fnc_rawdata_info=niftiinfo(fnc_in_file);
                     fnc_rawdata_len=size(fnc_rawdata,4);
+                    
+                    % Track atlas data changes
+                    atlas_tracking = struct();
+                    atlas_tracking.step1_original_atlas = fnc_pro_atlas_masks;
+                    
+                    % --- SAVE INTERMEDIATE DATA 0: Before any transformation (original loaded data) ---
+                    intermediate_data = struct();
+                    intermediate_data.step0_before_any_transform = struct();
+                    intermediate_data.step0_before_any_transform.func_shape = size(fnc_rawdata);
+                    intermediate_data.step0_before_any_transform.atlas_shape = size(fnc_pro_atlas_masks);
+                    
+                    % Use center region to get meaningful brain data instead of background (for step0)
+                    center_x_orig = round(size(fnc_rawdata,1)/2);
+                    center_y_orig = round(size(fnc_rawdata,2)/2);
+                    center_z_orig = round(size(fnc_rawdata,3)/2);
+                    x_start_orig = max(1, center_x_orig-9); x_end_orig = min(size(fnc_rawdata,1), center_x_orig+10);
+                    y_start_orig = max(1, center_y_orig-9); y_end_orig = min(size(fnc_rawdata,2), center_y_orig+10);
+                    z_start_orig = max(1, center_z_orig-4); z_end_orig = min(size(fnc_rawdata,3), center_z_orig+5);
+                    
+                    % Store small samples to avoid memory issues
+                    intermediate_data.step0_before_any_transform.func_sample = single(fnc_rawdata(x_start_orig:x_end_orig, y_start_orig:y_end_orig, z_start_orig:z_end_orig, 1:min(3,end)));
+                    intermediate_data.step0_before_any_transform.atlas_sample = single(fnc_pro_atlas_masks(x_start_orig:x_end_orig, y_start_orig:y_end_orig, z_start_orig:z_end_orig));
+                    intermediate_data.step0_before_any_transform.func_dtype = class(fnc_rawdata);
+                    intermediate_data.step0_before_any_transform.atlas_dtype = class(fnc_pro_atlas_masks);
+                    intermediate_data.step0_before_any_transform.sample_region = ['[', num2str(x_start_orig), ':', num2str(x_end_orig), ', ', num2str(y_start_orig), ':', num2str(y_end_orig), ', ', num2str(z_start_orig), ':', num2str(z_end_orig), ']'];
+                    intermediate_data.step0_before_any_transform.func_transform_T = fnc_rawdata_info.Transform.T;
+                    intermediate_data.step0_before_any_transform.atlas_transform_T = fnc_pro_atlas_info.Transform.T;
+                    intermediate_data.step0_before_any_transform.func_voxel_size = fnc_rawdata_info.PixelDimensions;
+                    intermediate_data.step0_before_any_transform.atlas_voxel_size = fnc_pro_atlas_info.PixelDimensions;
+                    
+                    disp('--- INTERMEDIATE DATA STEP 0: Before any transformation (original loaded data) ---');
+                    disp(['Func shape: ', num2str(size(fnc_rawdata))]);
+                    disp(['Atlas shape: ', num2str(size(fnc_pro_atlas_masks))]);
+                    disp(['Func transform T: ', mat2str(fnc_rawdata_info.Transform.T)]);
+                    disp(['Atlas transform T: ', mat2str(fnc_pro_atlas_info.Transform.T)]);
+                    disp(['Sample region (center brain): [', num2str(x_start_orig), ':', num2str(x_end_orig), ', ', num2str(y_start_orig), ':', num2str(y_end_orig), ', ', num2str(z_start_orig), ':', num2str(z_end_orig), ']']);
+                    func_sample_region_orig = fnc_rawdata(x_start_orig:x_end_orig, y_start_orig:y_end_orig, z_start_orig:z_end_orig, 1);
+                    func_sample_minmax_orig = [min(func_sample_region_orig(:)), max(func_sample_region_orig(:))];
+                    disp(['Func sample min/max: ', sprintf('%.6f', func_sample_minmax_orig(1)), ' / ', sprintf('%.6f', func_sample_minmax_orig(2))]);
+                    atlas_sample_region_orig = fnc_pro_atlas_masks(x_start_orig:x_end_orig, y_start_orig:y_end_orig, z_start_orig:z_end_orig);
+                    atlas_unique_labels_orig = unique(atlas_sample_region_orig(:));
+                    disp(['Atlas sample unique labels: ', num2str(atlas_unique_labels_orig')]);
+                    
+                    % --- SAVE INTERMEDIATE DATA 1: Original data (before any transformation) ---
+                    intermediate_data.step1_original = struct();
+                    intermediate_data.step1_original.func_shape = size(fnc_rawdata);
+                    intermediate_data.step1_original.atlas_shape = size(fnc_pro_atlas_masks);
+                    
+                    % Use center region to get meaningful brain data instead of background
+                    center_x = round(size(fnc_rawdata,1)/2);
+                    center_y = round(size(fnc_rawdata,2)/2);
+                    center_z = round(size(fnc_rawdata,3)/2);
+                    x_start = max(1, center_x-9); x_end = min(size(fnc_rawdata,1), center_x+10);
+                    y_start = max(1, center_y-9); y_end = min(size(fnc_rawdata,2), center_y+10);
+                    z_start = max(1, center_z-4); z_end = min(size(fnc_rawdata,3), center_z+5);
+                    
+                    % Store small samples to avoid memory issues
+                    intermediate_data.step1_original.func_sample = single(fnc_rawdata(x_start:x_end, y_start:y_end, z_start:z_end, 1:min(3,end)));
+                    intermediate_data.step1_original.atlas_sample = single(fnc_pro_atlas_masks(x_start:x_end, y_start:y_end, z_start:z_end));
+                    intermediate_data.step1_original.func_dtype = class(fnc_rawdata);
+                    intermediate_data.step1_original.atlas_dtype = class(fnc_pro_atlas_masks);
+                    intermediate_data.step1_original.sample_region = ['[', num2str(x_start), ':', num2str(x_end), ', ', num2str(y_start), ':', num2str(y_end), ', ', num2str(z_start), ':', num2str(z_end), ']'];
+                    
+                    disp('--- INTERMEDIATE DATA STEP 1: Original data (before any transformation) ---');
+                    disp(['Func shape: ', num2str(size(fnc_rawdata))]);
+                    disp(['Atlas shape: ', num2str(size(fnc_pro_atlas_masks))]);
+                    disp(['Sample region (center brain): [', num2str(x_start), ':', num2str(x_end), ', ', num2str(y_start), ':', num2str(y_end), ', ', num2str(z_start), ':', num2str(z_end), ']']);
+                    func_sample_region = fnc_rawdata(x_start:x_end, y_start:y_end, z_start:z_end, 1);
+                    func_sample_minmax = [min(func_sample_region(:)), max(func_sample_region(:))];
+                    disp(['Func sample min/max: ', sprintf('%.6f', func_sample_minmax(1)), ' / ', sprintf('%.6f', func_sample_minmax(2))]);
+                    atlas_sample_region = fnc_pro_atlas_masks(x_start:x_end, y_start:y_end, z_start:z_end);
+                    atlas_unique_labels = unique(atlas_sample_region(:));
+                    disp(['Atlas sample unique labels: ', num2str(atlas_unique_labels')]);
+                    
+                    
+                    % --- DEBUG: Print original functional data before resampling ---
+                    disp('=== ORIGINAL FUNCTIONAL DATA BEFORE RESAMPLING ===');
+                    disp(['Original func shape: ', num2str(size(fnc_rawdata))]);
+                    disp(['Original func data type: ', class(fnc_rawdata)]);
+                    disp(['Original func min: ', num2str(min(fnc_rawdata(:))), ', max: ', num2str(max(fnc_rawdata(:)))]);
+                    % Print a small sample of the original functional data for comparison
+                    func_sample = fnc_rawdata(1:min(5,end), 1:min(5,end), 1:min(5,end), 1:min(3,end));
+                    disp(['Original func sample [1:5, 1:5, 1:5, 1:3]:']);
+                    disp(['  Shape: ', num2str(size(func_sample))]);
+                    disp(['  Sample mean: ', sprintf('%.6f', mean(func_sample(:)))]);
+                    disp(['  Sample std: ', sprintf('%.6f', std(func_sample(:)))]);
+                    % Print first few voxel values from first timepoint
+                    first_vol_sample = fnc_rawdata(1:min(10,end), 1:min(10,end), 1, 1);
+                    first_vol_flat = first_vol_sample(:);
+                    disp(['First 10 voxels from first volume: ', num2str(first_vol_flat(1:min(10,end))', '%.6f ')]);
+                    disp(repmat('=', 1, 50));
+                    
                     % Print voxel size and orientation info for func
                     disp('Func voxel size:');
                     disp(fnc_rawdata_info.PixelDimensions);
@@ -497,6 +589,38 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                     
                     if isequal(fnc_pro_atlas_info.Transform.T,fnc_rawdata_info.Transform.T)
                         fnc_data=fnc_rawdata;
+                        % Atlas remains the same - no transformation needed
+                        atlas_tracking.step2_after_transform = fnc_pro_atlas_masks;
+                        
+                        % --- SAVE INTERMEDIATE DATA 2&3: No transformation case ---
+                        intermediate_data.step2_no_transform = struct();
+                        intermediate_data.step2_no_transform.fnc_data_shape = size(fnc_data);
+                        intermediate_data.step2_no_transform.atlas_shape = size(fnc_pro_atlas_masks);
+                        
+                        % Use center region for meaningful brain data
+                        center_x_nt = round(size(fnc_data,1)/2);
+                        center_y_nt = round(size(fnc_data,2)/2);
+                        center_z_nt = round(size(fnc_data,3)/2);
+                        x_start_nt = max(1, center_x_nt-9); x_end_nt = min(size(fnc_data,1), center_x_nt+10);
+                        y_start_nt = max(1, center_y_nt-9); y_end_nt = min(size(fnc_data,2), center_y_nt+10);
+                        z_start_nt = max(1, center_z_nt-4); z_end_nt = min(size(fnc_data,3), center_z_nt+5);
+                        
+                        % Store small samples to avoid memory issues
+                        intermediate_data.step2_no_transform.fnc_data_sample = single(fnc_data(x_start_nt:x_end_nt, y_start_nt:y_end_nt, z_start_nt:z_end_nt, 1:min(3,end)));
+                        intermediate_data.step2_no_transform.atlas_sample = single(fnc_pro_atlas_masks(x_start_nt:x_end_nt, y_start_nt:y_end_nt, z_start_nt:z_end_nt));
+                        intermediate_data.step2_no_transform.sample_region = ['[', num2str(x_start_nt), ':', num2str(x_end_nt), ', ', num2str(y_start_nt), ':', num2str(y_end_nt), ', ', num2str(z_start_nt), ':', num2str(z_end_nt), ']'];
+                        
+                        disp('--- INTERMEDIATE DATA: No transformation case ---');
+                        disp(['fnc_data shape (no transform): ', num2str(size(fnc_data))]);
+                        disp(['atlas shape (no transform): ', num2str(size(fnc_pro_atlas_masks))]);
+                        disp(['Sample region (center brain): [', num2str(x_start_nt), ':', num2str(x_end_nt), ', ', num2str(y_start_nt), ':', num2str(y_end_nt), ', ', num2str(z_start_nt), ':', num2str(z_end_nt), ']']);
+                        no_transform_func_sample_region = fnc_data(x_start_nt:x_end_nt, y_start_nt:y_end_nt, z_start_nt:z_end_nt, 1);
+                        no_transform_func_sample_minmax = [min(no_transform_func_sample_region(:)), max(no_transform_func_sample_region(:))];
+                        disp(['fnc_data sample min/max: ', sprintf('%.6f', no_transform_func_sample_minmax(1)), ' / ', sprintf('%.6f', no_transform_func_sample_minmax(2))]);
+                        no_transform_atlas_sample_region = fnc_pro_atlas_masks(x_start_nt:x_end_nt, y_start_nt:y_end_nt, z_start_nt:z_end_nt);
+                        no_transform_atlas_unique_labels = unique(no_transform_atlas_sample_region(:));
+                        disp(['atlas sample unique labels: ', num2str(no_transform_atlas_unique_labels')]);
+                        
                     else
                         fnc_data=zeros([fnc_pro_atlas_size,fnc_rawdata_len],"double");
                         
@@ -508,6 +632,47 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                         disp('fnc_rawdata_tt:');
                         %disp(fnc_rawdata_tt);
                         fnc_rawdata_tt_s=size(fnc_rawdata_tt);
+                        
+                        % --- SAVE INTERMEDIATE DATA 2: After imwarp transformation ---
+                        intermediate_data.step2_after_imwarp = struct();
+                        intermediate_data.step2_after_imwarp.fnc_rawdata_t_shape = size(fnc_rawdata_t);
+                        intermediate_data.step2_after_imwarp.fnc_rawdata_tt_shape = size(fnc_rawdata_tt);
+                        
+                        % Use center region for meaningful brain data
+                        center_x_t = round(size(fnc_rawdata_t,1)/2);
+                        center_y_t = round(size(fnc_rawdata_t,2)/2);
+                        center_z_t = round(size(fnc_rawdata_t,3)/2);
+                        x_start_t = max(1, center_x_t-9); x_end_t = min(size(fnc_rawdata_t,1), center_x_t+10);
+                        y_start_t = max(1, center_y_t-9); y_end_t = min(size(fnc_rawdata_t,2), center_y_t+10);
+                        z_start_t = max(1, center_z_t-4); z_end_t = min(size(fnc_rawdata_t,3), center_z_t+5);
+                        
+                        center_x_tt = round(size(fnc_rawdata_tt,1)/2);
+                        center_y_tt = round(size(fnc_rawdata_tt,2)/2);
+                        center_z_tt = round(size(fnc_rawdata_tt,3)/2);
+                        x_start_tt = max(1, center_x_tt-9); x_end_tt = min(size(fnc_rawdata_tt,1), center_x_tt+10);
+                        y_start_tt = max(1, center_y_tt-9); y_end_tt = min(size(fnc_rawdata_tt,2), center_y_tt+10);
+                        z_start_tt = max(1, center_z_tt-4); z_end_tt = min(size(fnc_rawdata_tt,3), center_z_tt+5);
+                        
+                        % Store small samples to avoid memory issues
+                        intermediate_data.step2_after_imwarp.fnc_rawdata_t_sample = single(fnc_rawdata_t(x_start_t:x_end_t, y_start_t:y_end_t, z_start_t:z_end_t));
+                        intermediate_data.step2_after_imwarp.fnc_rawdata_tt_sample = single(fnc_rawdata_tt(x_start_tt:x_end_tt, y_start_tt:y_end_tt, z_start_tt:z_end_tt));
+                        intermediate_data.step2_after_imwarp.fnc_rawdata_t_dtype = class(fnc_rawdata_t);
+                        intermediate_data.step2_after_imwarp.fnc_rawdata_tt_dtype = class(fnc_rawdata_tt);
+                        intermediate_data.step2_after_imwarp.sample_region_t = ['[', num2str(x_start_t), ':', num2str(x_end_t), ', ', num2str(y_start_t), ':', num2str(y_end_t), ', ', num2str(z_start_t), ':', num2str(z_end_t), ']'];
+                        intermediate_data.step2_after_imwarp.sample_region_tt = ['[', num2str(x_start_tt), ':', num2str(x_end_tt), ', ', num2str(y_start_tt), ':', num2str(y_end_tt), ', ', num2str(z_start_tt), ':', num2str(z_end_tt), ']'];
+                        
+                        disp('--- INTERMEDIATE DATA STEP 2: After imwarp transformation ---');
+                        disp(['fnc_rawdata_t shape: ', num2str(size(fnc_rawdata_t))]);
+                        disp(['fnc_rawdata_tt shape: ', num2str(size(fnc_rawdata_tt))]);
+                        disp(['Sample region t (center brain): [', num2str(x_start_t), ':', num2str(x_end_t), ', ', num2str(y_start_t), ':', num2str(y_end_t), ', ', num2str(z_start_t), ':', num2str(z_end_t), ']']);
+                        disp(['Sample region tt (center brain): [', num2str(x_start_tt), ':', num2str(x_end_tt), ', ', num2str(y_start_tt), ':', num2str(y_end_tt), ', ', num2str(z_start_tt), ':', num2str(z_end_tt), ']']);
+                        t_sample_region = fnc_rawdata_t(x_start_t:x_end_t, y_start_t:y_end_t, z_start_t:z_end_t);
+                        t_sample_minmax = [min(t_sample_region(:)), max(t_sample_region(:))];
+                        disp(['fnc_rawdata_t sample min/max: ', sprintf('%.6f', t_sample_minmax(1)), ' / ', sprintf('%.6f', t_sample_minmax(2))]);
+                        tt_sample_region = fnc_rawdata_tt(x_start_tt:x_end_tt, y_start_tt:y_end_tt, z_start_tt:z_end_tt);
+                        tt_sample_minmax = [min(tt_sample_region(:)), max(tt_sample_region(:))];
+                        disp(['fnc_rawdata_tt sample min/max: ', sprintf('%.6f', tt_sample_minmax(1)), ' / ', sprintf('%.6f', tt_sample_minmax(2))]);
+                        
                         
                         disp('fnc_rawdata_t shape (resampled to expected grid):');
                         disp(fnc_rawdata_tt_s);
@@ -595,6 +760,13 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                         disp(['dys: ', num2str(dys), ' to ', num2str(dye)]);
                         disp(['dzs: ', num2str(dzs), ' to ', num2str(dze)]);
                         
+                        % Print debug output to match Python format
+                        disp(['Target atlas shape: (', num2str(fnc_pro_atlas_size(1)), ', ', num2str(fnc_pro_atlas_size(2)), ', ', num2str(fnc_pro_atlas_size(3)), ')']);
+                        disp(['Resampled data shape before cropping: (', num2str(fnc_rawdata_tt_s(1)), ', ', num2str(fnc_rawdata_tt_s(2)), ', ', num2str(fnc_rawdata_tt_s(3)), ')']);
+                        disp(['Using MATLAB-style cropping indices (1-based):']);
+                        disp(['Atlas placement: X[', num2str(axs), ':', num2str(axe), '], Y[', num2str(ays), ':', num2str(aye), '], Z[', num2str(azs), ':', num2str(aze), ']']);
+                        disp(['Data extraction: X[', num2str(dxs), ':', num2str(dxe), '], Y[', num2str(dys), ':', num2str(dye), '], Z[', num2str(dzs), ':', num2str(dze), ']']);
+                        
                         % Apply to all frames
                         disp('Processing all timepoints with imwarp...');
                         for ii=1:fnc_rawdata_len
@@ -602,12 +774,53 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                             fnc_rawdata_tt=imwarp(fnc_rawdata_t,fnc_pro_atlas_invtran);
                             fnc_data(axs:axe,ays:aye,azs:aze,ii)=fnc_rawdata_tt(dxs:dxe,dys:dye,dzs:dze);
                         end
+                        
+                        % --- SAVE INTERMEDIATE DATA 3: After cropping (final) ---
+                        intermediate_data.step3_after_crop = struct();
+                        intermediate_data.step3_after_crop.fnc_data_shape = size(fnc_data);
+                        intermediate_data.step3_after_crop.atlas_shape = size(fnc_pro_atlas_masks);
+                        
+                        % Use center region for meaningful brain data
+                        center_x_f = round(size(fnc_data,1)/2);
+                        center_y_f = round(size(fnc_data,2)/2);
+                        center_z_f = round(size(fnc_data,3)/2);
+                        x_start_f = max(1, center_x_f-9); x_end_f = min(size(fnc_data,1), center_x_f+10);
+                        y_start_f = max(1, center_y_f-9); y_end_f = min(size(fnc_data,2), center_y_f+10);
+                        z_start_f = max(1, center_z_f-4); z_end_f = min(size(fnc_data,3), center_z_f+5);
+                        
+                        % Store small samples to avoid memory issues
+                        intermediate_data.step3_after_crop.fnc_data_sample = single(fnc_data(x_start_f:x_end_f, y_start_f:y_end_f, z_start_f:z_end_f, 1:min(3,end)));
+                        intermediate_data.step3_after_crop.atlas_sample = single(fnc_pro_atlas_masks(x_start_f:x_end_f, y_start_f:y_end_f, z_start_f:z_end_f));
+                        intermediate_data.step3_after_crop.cropping_indices = struct();
+                        intermediate_data.step3_after_crop.cropping_indices.atlas_placement = ['X[', num2str(axs), ':', num2str(axe), '], Y[', num2str(ays), ':', num2str(aye), '], Z[', num2str(azs), ':', num2str(aze), ']'];
+                        intermediate_data.step3_after_crop.cropping_indices.data_extraction = ['X[', num2str(dxs), ':', num2str(dxe), '], Y[', num2str(dys), ':', num2str(dye), '], Z[', num2str(dzs), ':', num2str(dze), ']'];
+                        intermediate_data.step3_after_crop.sample_region = ['[', num2str(x_start_f), ':', num2str(x_end_f), ', ', num2str(y_start_f), ':', num2str(y_end_f), ', ', num2str(z_start_f), ':', num2str(z_end_f), ']'];
+                        
+                        disp('--- INTERMEDIATE DATA STEP 3: After cropping (final) ---');
+                        disp(['Final fnc_data shape: ', num2str(size(fnc_data))]);
+                        disp(['Final atlas shape: ', num2str(size(fnc_pro_atlas_masks))]);
+                        disp(['Sample region (center brain): [', num2str(x_start_f), ':', num2str(x_end_f), ', ', num2str(y_start_f), ':', num2str(y_end_f), ', ', num2str(z_start_f), ':', num2str(z_end_f), ']']);
+                        final_func_sample_region = fnc_data(x_start_f:x_end_f, y_start_f:y_end_f, z_start_f:z_end_f, 1);
+                        final_func_sample_minmax = [min(final_func_sample_region(:)), max(final_func_sample_region(:))];
+                        disp(['Final fnc_data sample min/max: ', sprintf('%.6f', final_func_sample_minmax(1)), ' / ', sprintf('%.6f', final_func_sample_minmax(2))]);
+                        final_atlas_sample_region = fnc_pro_atlas_masks(x_start_f:x_end_f, y_start_f:y_end_f, z_start_f:z_end_f);
+                        final_atlas_unique_labels = unique(final_atlas_sample_region(:));
+                        disp(['Final atlas sample unique labels: ', num2str(final_atlas_unique_labels')]);
+                        
+                        
+                        % Atlas transformed and cropped to match functional data space
+                        atlas_tracking.step2_after_transform = fnc_pro_atlas_masks;
                         disp('Resampled func_data shape:');
                         fprintf('   %d   %d   %d   %d\n', size(fnc_data,1), size(fnc_data,2), size(fnc_data,3), size(fnc_data,4));
                         disp(' ');
                         disp('Final func_data shape:');
                         fprintf('   %d   %d   %d   %d\n', size(fnc_data,1), size(fnc_data,2), size(fnc_data,3), size(fnc_data,4));
                         disp(' ');
+                        
+                        % Add debug output to match Python format
+                        disp(['Final func shape: (', num2str(size(fnc_data,1)), ', ', num2str(size(fnc_data,2)), ', ', num2str(size(fnc_data,3)), ', ', num2str(size(fnc_data,4)), ')']);
+                        disp(['Final atlas shape: (', num2str(size(fnc_pro_atlas_masks,1)), ', ', num2str(size(fnc_pro_atlas_masks,2)), ', ', num2str(size(fnc_pro_atlas_masks,3)), ')']);
+                        disp(['Target atlas shape match: ', num2str(isequal(size(fnc_pro_atlas_masks), size(fnc_data(:,:,:,1))))]);
                     end
 
                     % Calculate atlased data
@@ -615,26 +828,76 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                     process_d.Message = {[num2str(i),'/',num2str(fnc_pro_filelength),': Applying Atlas']};
                     disp([num2str(i),'/',num2str(fnc_pro_filelength),': Applying Atlas']);
                     
-                    % Use the atlas which is already in the target space
-                    disp('Resampled atlas shape:');
-                    fprintf('   %d   %d   %d\n', size(fnc_pro_atlas_masks,1), size(fnc_pro_atlas_masks,2), size(fnc_pro_atlas_masks,3));
-                    disp(' ');
+                    % Initialize tracking structure for atlased_data creation
+                    atlased_tracking = struct();
                     
-                    % Print target atlas shape and data shape before cropping
-                    disp(['Target atlas shape: (', num2str(size(fnc_pro_atlas_masks,1)), ', ', num2str(size(fnc_pro_atlas_masks,2)), ', ', num2str(size(fnc_pro_atlas_masks,3)), ')']);
-                    disp(['Cropped func shape: (', num2str(size(fnc_data,1)), ', ', num2str(size(fnc_data,2)), ', ', num2str(size(fnc_data,3)), ', ', num2str(size(fnc_data,4)), ')']);
-                    disp(['Cropped atlas shape: (', num2str(size(fnc_pro_atlas_masks,1)), ', ', num2str(size(fnc_pro_atlas_masks,2)), ', ', num2str(size(fnc_pro_atlas_masks,3)), ')']);
-                    disp(['Target atlas shape match: ', num2str(isequal(size(fnc_pro_atlas_masks), size(fnc_data(:,:,:,1))))]);
+                    % --- TRACK: Save temp_value before resampling/transformation for comparison ---
+                    % First, let's get the original atlas and functional data before any transformation
+                    if isequal(fnc_pro_atlas_info.Transform.T,fnc_rawdata_info.Transform.T)
+                        % No transformation case - use original data
+                        original_atlas_for_temp_value = fnc_pro_atlas_masks;
+                        original_func_for_temp_value = fnc_rawdata;
+                    else
+                        % Transformation case - use original data before transformation
+                        original_atlas_for_temp_value = fnc_pro_atlas_masks;
+                        original_func_for_temp_value = fnc_rawdata;
+                    end
+                    
+                    % Get temp_value BEFORE resampling/transformation for first few ROIs
+                    original_atlas_flat = original_atlas_for_temp_value(:);
+                    original_func_flat = reshape(original_func_for_temp_value, size(original_func_for_temp_value,1)*size(original_func_for_temp_value,2)*size(original_func_for_temp_value,3), size(original_func_for_temp_value,4));
+                    
+                    temp_value_before_transform = struct();
+                    for roi_idx = 1:min(5, atl_len)  % Only track first 5 ROIs
+                        temp_pos_before = original_atlas_flat == roi_idx;
+                        temp_value_before = original_func_flat(temp_pos_before, :);
+                        field_name = ['roi_', num2str(roi_idx)];
+                        temp_value_before_transform.(field_name).voxel_count = sum(temp_pos_before);
+                        temp_value_before_transform.(field_name).temp_pos_indices = find(temp_pos_before, 20, 'first');
+                        temp_value_before_transform.(field_name).temp_value_sample = temp_value_before(1:min(10,end), 1:min(3,end));
+                        temp_value_before_transform.(field_name).temp_value_shape = size(temp_value_before);
+                        if size(temp_value_before,1) > 0
+                            first_timepoint_values = temp_value_before(:,1);
+                            temp_value_before_transform.(field_name).mean_t1 = mean(first_timepoint_values, 'omitnan');
+                            temp_value_before_transform.(field_name).std_t1 = std(first_timepoint_values, 'omitnan');
+                            temp_value_before_transform.(field_name).first_few_voxels_t1 = first_timepoint_values(1:min(5, length(first_timepoint_values)));
+                        end
+                    end
                     
                     atlased_data=zeros(fnc_rawdata_len,atl_len,"double");
                     fnc_pro_atlas_masks_flat=fnc_pro_atlas_masks(:);
                     fnc_data_flat=reshape(fnc_data,fnc_pro_atlas_size(1)*fnc_pro_atlas_size(2)*fnc_pro_atlas_size(3),fnc_rawdata_len);
                     
-                    disp(['Resampled atlas shape: ', num2str(size(fnc_pro_atlas_masks,1)), ' x ', num2str(size(fnc_pro_atlas_masks,2)), ' x ', num2str(size(fnc_pro_atlas_masks,3))]);
-                    disp(['Resampled func shape: ', num2str(size(fnc_data,1)), ' x ', num2str(size(fnc_data,2)), ' x ', num2str(size(fnc_data,3))]);
+                    % Track: step 1 - input data before ROI extraction (reduced data)
+                    atlased_tracking.step1_fnc_data_shape = size(fnc_data);
+                    atlased_tracking.step1_atlas_masks_shape = size(fnc_pro_atlas_masks);
+                    atlased_tracking.step1_atlas_flat_shape = size(fnc_pro_atlas_masks_flat);
+                    atlased_tracking.step1_fnc_data_flat_shape = size(fnc_data_flat);
+                    atlased_tracking.step1_atlased_data_init_shape = size(atlased_data);
                     
-                    disp(['fnc_pro_atlas_masks_flat shape: ', num2str(length(fnc_pro_atlas_masks_flat))]);
-                    disp(['fnc_data_flat shape: ', num2str(size(fnc_data_flat,1)), ' x ', num2str(size(fnc_data_flat,2))]);
+                    % Store only first few values for verification
+                    atlased_tracking.step1_fnc_data_sample = fnc_data(1:min(5,end), 1:min(5,end), 1:min(5,end), 1:min(3,end));
+                    atlased_tracking.step1_atlas_masks_sample = fnc_pro_atlas_masks(1:min(10,end), 1:min(10,end), 1:min(10,end));
+                    atlased_tracking.step1_atlas_flat_sample = fnc_pro_atlas_masks_flat(1:min(100,end));
+                    atlased_tracking.step1_fnc_data_flat_sample = fnc_data_flat(1:min(100,end), 1:min(3,end));
+                    
+                    % --- TRACK: Save temp_value AFTER resampling/transformation for comparison ---
+                    temp_value_after_transform = struct();
+                    for roi_idx = 1:min(5, atl_len)  % Only track first 5 ROIs
+                        temp_pos_after = fnc_pro_atlas_masks_flat == roi_idx;
+                        temp_value_after = fnc_data_flat(temp_pos_after, :);
+                        field_name = ['roi_', num2str(roi_idx)];
+                        temp_value_after_transform.(field_name).voxel_count = sum(temp_pos_after);
+                        temp_value_after_transform.(field_name).temp_pos_indices = find(temp_pos_after, 20, 'first');
+                        temp_value_after_transform.(field_name).temp_value_sample = temp_value_after(1:min(10,end), 1:min(3,end));
+                        temp_value_after_transform.(field_name).temp_value_shape = size(temp_value_after);
+                        if size(temp_value_after,1) > 0
+                            first_timepoint_values = temp_value_after(:,1);
+                            temp_value_after_transform.(field_name).mean_t1 = mean(first_timepoint_values, 'omitnan');
+                            temp_value_after_transform.(field_name).std_t1 = std(first_timepoint_values, 'omitnan');
+                            temp_value_after_transform.(field_name).first_few_voxels_t1 = first_timepoint_values(1:min(5, length(first_timepoint_values)));
+                        end
+                    end
                     
                     for ii=1:atl_len
                         process_d.Value=(i-0.8+0.2*ii/atl_len)/fnc_pro_filelength;
@@ -647,6 +910,15 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                         disp(['ROI ', num2str(ii), ': ', num2str(voxel_count), ' voxels']);
                         
                         temp_value=fnc_data_flat(temp_pos,:);
+                        
+                        % Track: step 2 - ROI extraction details for each ROI (reduced data)
+                        if ii <= 5  % Only track first 5 ROIs to avoid excessive data
+                            roi_field = ['step2_roi_', num2str(ii)];
+                            atlased_tracking.(roi_field).voxel_count = voxel_count;
+                            atlased_tracking.(roi_field).temp_pos_indices = find(temp_pos, 20, 'first');  % Only first 20 indices
+                            atlased_tracking.(roi_field).temp_value_sample = temp_value(1:min(10,end), 1:min(3,end));  % Only first 10 voxels, 3 timepoints
+                            atlased_tracking.(roi_field).temp_value_shape = size(temp_value);
+                        end
                         
                         if voxel_count > 0
                             % Print first few voxel values and statistics for comparison
@@ -661,10 +933,24 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                         end
                         
                         %temp_value=temp_value(temp_value>0);    % Remove Zeros in calculating the mean.
-                        atlased_data(:,ii)=mean(temp_value,'omitnan');
+                        roi_timeseries = mean(temp_value,'omitnan');
+                        atlased_data(:,ii) = roi_timeseries;
+                        
+                        % Track: step 3 - final ROI timeseries for each ROI (reduced data)
+                        if ii <= 5  % Only track first 5 ROIs to avoid excessive data
+                            roi_field = ['step3_roi_', num2str(ii)];
+                            atlased_tracking.(roi_field).roi_timeseries_sample = roi_timeseries(1:min(10,end));  % Only first 10 timepoints
+                            atlased_tracking.(roi_field).roi_timeseries_shape = size(roi_timeseries);
+                            atlased_tracking.(roi_field).atlased_data_column_sample = atlased_data(1:min(10,end), ii);  % Only first 10 timepoints
+                        end
                     end
                     disp(['Final atlased_data shape: ', num2str(size(atlased_data,1)), ' x ', num2str(size(atlased_data,2))]);
                     
+                    % Track: step 4 - final atlased_data (reduced data)
+                    atlased_tracking.step4_final_atlased_data_shape = size(atlased_data);
+                    atlased_tracking.step4_final_atlased_data_sample = atlased_data(1:min(10,end), 1:min(5,end));  % First 10 timepoints, first 5 ROIs
+                    atlased_tracking.step4_final_atlased_data_stats.mean_per_roi = mean(atlased_data, 1, 'omitnan');
+                    atlased_tracking.step4_final_atlased_data_stats.std_per_roi = std(atlased_data, 0, 1, 'omitnan');
                 elseif app.FileFormatDropDown.Value==2
                     temp_data=load(fnc_in_file);
                     temp_data=struct2cell(temp_data);
@@ -741,6 +1027,16 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                 subj_data.d_kernel=app.gatp_setting.kernel;
                 subj_data.d_atlas_list=app.gatp_setting.atlas_list;
                 
+                % Add atlased_data tracking to output
+                subj_data.atlased_tracking = atlased_tracking;
+                
+                % Add temp_value before and after transformation tracking
+                subj_data.temp_value_before_transform = temp_value_before_transform;
+                subj_data.temp_value_after_transform = temp_value_after_transform;
+                
+                % Add intermediate data tracking for resampling/transformation isolation
+                subj_data.intermediate_data = intermediate_data;
+                
                 % #####################
                 % # Data include info #
                 % #####################
@@ -753,7 +1049,7 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                 else
                     fnc_pro_atlas_file=fullfile(fnc_out_path,app.gatp_setting.file_list{i});
                 end
-                save([fnc_pro_atlas_file,'.mat'],'subj_data');
+                save([fnc_pro_atlas_file,'.mat'],'subj_data','-v7.3');
                 process_d.Value = i/fnc_pro_filelength;
                 process_d.Message = {[num2str(i),'/',num2str(fnc_pro_filelength),': Done']};
             end
