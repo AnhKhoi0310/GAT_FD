@@ -478,6 +478,8 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                     center_x_orig = round(size(fnc_rawdata,1)/2);
                     center_y_orig = round(size(fnc_rawdata,2)/2);
                     center_z_orig = round(size(fnc_rawdata,3)/2);
+
+                    disp("center coords (original data): "); disp([center_x_orig, center_y_orig, center_z_orig]);
                     x_start_orig = max(1, center_x_orig-9); x_end_orig = min(size(fnc_rawdata,1), center_x_orig+10);
                     y_start_orig = max(1, center_y_orig-9); y_end_orig = min(size(fnc_rawdata,2), center_y_orig+10);
                     z_start_orig = max(1, center_z_orig-4); z_end_orig = min(size(fnc_rawdata,3), center_z_orig+5);

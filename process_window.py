@@ -475,6 +475,11 @@ class ProcessWindow(QWidget):
                 else:
                     atlas_nib = nib.Nifti1Image(atlas_img, func_img.affine)
                 atlas_data = atlas_nib.get_fdata()
+                func_data = func_img.get_fdata()
+                
+                # CRITICAL: Ensure same data type as MATLAB (single precision)
+                atlas_data = atlas_data.astype(np.float32)  # MATLAB uses 'single' (float32)
+                func_data = func_data.astype(np.float32)    # MATLAB uses 'single' (float32)
                 
                 # --- DEBUG: Print original functional data before resampling ---
                 print('=== ORIGINAL FUNCTIONAL DATA BEFORE RESAMPLING ===')
@@ -485,7 +490,7 @@ class ProcessWindow(QWidget):
                 # IMPORTANT: Use MATLAB-equivalent indexing (1:5 in MATLAB = 0:5 in Python, but we want same voxels)
                 # So MATLAB [1:5, 1:5, 1:5, 1:3] = Python [1:6, 1:6, 1:6, 1:4] to get same voxels
                 func_sample = func_data[1:6, 1:6, 1:6, 1:4]  # Match MATLAB indexing
-                print(f'Original func sample [1:6, 1:6, 1:6, 1:4] (MATLAB equivalent [1:5, 1:5, 1:5, 1:3]):')
+                print(f'Original func sample [1:6, 1:6, 1:4] (MATLAB equivalent [1:5, 1:5, 1:5, 1:3]):')
                 print(f'  Shape: {func_sample.shape}')
                 print(f'  Sample mean: {np.mean(func_sample):.6f}')
                 print(f'  Sample std: {np.std(func_sample):.6f}')
@@ -507,7 +512,12 @@ class ProcessWindow(QWidget):
                 # --- SAVE INTERMEDIATE DATA 0: Before reorientation (original loaded data) ---
                 intermediate_data = {}
                 # Use center region to get meaningful brain data instead of background
-                center_x_orig, center_y_orig, center_z_orig = func_data.shape[0]//2, func_data.shape[1]//2, func_data.shape[2]//2
+                # MATLAB: center_x_orig = round(size(fnc_rawdata,1)/2)
+                center_x_orig = int(np.ceil(func_data.shape[0]/2))
+                center_y_orig = int(np.ceil(func_data.shape[1]/2))
+                center_z_orig = int(np.ceil(func_data.shape[2]/2))
+                print(f"Center voxel (original data, MATLAB-style 1-based): ({center_x_orig}, {center_y_orig}, {center_z_orig})")   
+                # MATLAB uses [center-9:center+10] (1-based), we use [center-10:center+10] (0-based) for equivalent range
                 x_start_orig, x_end_orig = max(0, center_x_orig-10), min(func_data.shape[0], center_x_orig+10)
                 y_start_orig, y_end_orig = max(0, center_y_orig-10), min(func_data.shape[1], center_y_orig+10)
                 z_start_orig, z_end_orig = max(0, center_z_orig-5), min(func_data.shape[2], center_z_orig+5)
@@ -520,6 +530,7 @@ class ProcessWindow(QWidget):
                     'func_dtype': str(func_data.dtype),
                     'atlas_dtype': str(atlas_data.dtype),
                     'sample_region': f'[{x_start_orig}:{x_end_orig}, {y_start_orig}:{y_end_orig}, {z_start_orig}:{z_end_orig}]',
+                    'matlab_equivalent_region': f'[{x_start_orig+1}:{x_end_orig}, {y_start_orig+1}:{y_end_orig}, {z_start_orig+1}:{z_end_orig}]',
                     'func_orientation': nib.aff2axcodes(func_img.affine),
                     'atlas_orientation': nib.aff2axcodes(atlas_nib.affine),
                     'func_affine': func_img.affine.copy(),
@@ -530,9 +541,11 @@ class ProcessWindow(QWidget):
                 print(f"Atlas shape: {atlas_data.shape}")
                 print(f"Func orientation: {nib.aff2axcodes(func_img.affine)}")
                 print(f"Atlas orientation: {nib.aff2axcodes(atlas_nib.affine)}")
-                print(f"Sample region (center brain): [{x_start_orig}:{x_end_orig}, {y_start_orig}:{y_end_orig}, {z_start_orig}:{z_end_orig}]")
+                print(f"Sample region (Python 0-based): [{x_start_orig}:{x_end_orig}, {y_start_orig}:{y_end_orig}, {z_start_orig}:{z_end_orig}]")
+                print(f"Sample region (MATLAB equivalent 1-based): [{x_start_orig+1}:{x_end_orig}, {y_start_orig+1}:{y_end_orig}, {z_start_orig+1}:{z_end_orig}]")
                 func_sample_region_orig = func_data[x_start_orig:x_end_orig, y_start_orig:y_end_orig, z_start_orig:z_end_orig, 0]
                 print(f"Func sample min/max: {np.min(func_sample_region_orig):.6f} / {np.max(func_sample_region_orig):.6f}")
+                print(f"Func sample first element: {func_sample_region_orig[0,0,0]:.6f}")
                 atlas_sample_region_orig = atlas_data[x_start_orig:x_end_orig, y_start_orig:y_end_orig, z_start_orig:z_end_orig]
                 print(f"Atlas sample unique labels: {np.unique(atlas_sample_region_orig)}")
                 
@@ -570,7 +583,10 @@ class ProcessWindow(QWidget):
                 
                 # --- SAVE INTERMEDIATE DATA 1: After reorientation, before resampling ---
                 # Use center region to get meaningful brain data instead of background
-                center_x, center_y, center_z = func_data_las.shape[0]//2, func_data_las.shape[1]//2, func_data_las.shape[2]//2
+                # Use np.round to match MATLAB's round() function
+                center_x = int(np.ceil(func_data_las.shape[0]/2))
+                center_y = int(np.ceil(func_data_las.shape[1]/2))
+                center_z = int(np.ceil(func_data_las.shape[2]/2))
                 x_start, x_end = max(0, center_x-10), min(func_data_las.shape[0], center_x+10)
                 y_start, y_end = max(0, center_y-10), min(func_data_las.shape[1], center_y+10)
                 z_start, z_end = max(0, center_z-5), min(func_data_las.shape[2], center_z+5)
@@ -692,7 +708,10 @@ class ProcessWindow(QWidget):
                 
                 # --- SAVE INTERMEDIATE DATA 2: After resampling, before cropping ---
                 # Use same center region for consistency
-                center_x_r, center_y_r, center_z_r = resampled_func.shape[0]//2, resampled_func.shape[1]//2, resampled_func.shape[2]//2
+                # Use np.round to match MATLAB's round() function
+                center_x_r = int(np.ceil(resampled_func.shape[0]/2))
+                center_y_r = int(np.ceil(resampled_func.shape[1]/2))
+                center_z_r = int(np.ceil(resampled_func.shape[2]/2))
                 x_start_r, x_end_r = max(0, center_x_r-10), min(resampled_func.shape[0], center_x_r+10)
                 y_start_r, y_end_r = max(0, center_y_r-10), min(resampled_func.shape[1], center_y_r+10)
                 z_start_r, z_end_r = max(0, center_z_r-5), min(resampled_func.shape[2], center_z_r+5)
@@ -758,7 +777,9 @@ class ProcessWindow(QWidget):
                 
                 # --- SAVE INTERMEDIATE DATA 3: After cropping (final) ---
                 # Use same center region for consistency
-                center_x_f, center_y_f, center_z_f = final_func.shape[0]//2, final_func.shape[1]//2, final_func.shape[2]//2
+                center_x_f = int(np.ceil(final_func.shape[0]/2))
+                center_y_f = int(np.ceil(final_func.shape[1]/2))
+                center_z_f = int(np.ceil(final_func.shape[2]/2))
                 x_start_f, x_end_f = max(0, center_x_f-10), min(final_func.shape[0], center_x_f+10)
                 y_start_f, y_end_f = max(0, center_y_f-10), min(final_func.shape[1], center_y_f+10)
                 z_start_f, z_end_f = max(0, center_z_f-5), min(final_func.shape[2], center_z_f+5)
