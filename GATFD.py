@@ -8,6 +8,7 @@ from process_window import ProcessWindow
 from network_window import NetworkWindow
 from view_window import ViewWindow
 from design_window import DesignWindow
+from correlation_window import CorrWindow  
 
 class MainWindow(QWidget):
     def __init__(self):
@@ -39,6 +40,10 @@ class MainWindow(QWidget):
         btn_design.clicked.connect(self.open_design_window)
         layout.addWidget(btn_design)
 
+        btn_corr = QPushButton('Correlation')
+        btn_corr.clicked.connect(self.open_corr_window)
+        layout.addWidget(btn_corr)
+
         self.setLayout(layout)
 
     def open_process_window(self):
@@ -57,6 +62,9 @@ class MainWindow(QWidget):
         self.design_win = DesignWindow()
         self.design_win.show()
 
+    def open_corr_window(self):
+        self.corr_win = CorrWindow()  
+        self.corr_win.show()
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     main_win = MainWindow()

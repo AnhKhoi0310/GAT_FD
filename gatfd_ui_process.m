@@ -830,76 +830,9 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                     process_d.Message = {[num2str(i),'/',num2str(fnc_pro_filelength),': Applying Atlas']};
                     disp([num2str(i),'/',num2str(fnc_pro_filelength),': Applying Atlas']);
                     
-                    % Initialize tracking structure for atlased_data creation
-                    atlased_tracking = struct();
-                    
-                    % --- TRACK: Save temp_value before resampling/transformation for comparison ---
-                    % First, let's get the original atlas and functional data before any transformation
-                    if isequal(fnc_pro_atlas_info.Transform.T,fnc_rawdata_info.Transform.T)
-                        % No transformation case - use original data
-                        original_atlas_for_temp_value = fnc_pro_atlas_masks;
-                        original_func_for_temp_value = fnc_rawdata;
-                    else
-                        % Transformation case - use original data before transformation
-                        original_atlas_for_temp_value = fnc_pro_atlas_masks;
-                        original_func_for_temp_value = fnc_rawdata;
-                    end
-                    
-                    % Get temp_value BEFORE resampling/transformation for first few ROIs
-                    original_atlas_flat = original_atlas_for_temp_value(:);
-                    original_func_flat = reshape(original_func_for_temp_value, size(original_func_for_temp_value,1)*size(original_func_for_temp_value,2)*size(original_func_for_temp_value,3), size(original_func_for_temp_value,4));
-                    
-                    temp_value_before_transform = struct();
-                    for roi_idx = 1:min(5, atl_len)  % Only track first 5 ROIs
-                        temp_pos_before = original_atlas_flat == roi_idx;
-                        temp_value_before = original_func_flat(temp_pos_before, :);
-                        field_name = ['roi_', num2str(roi_idx)];
-                        temp_value_before_transform.(field_name).voxel_count = sum(temp_pos_before);
-                        temp_value_before_transform.(field_name).temp_pos_indices = find(temp_pos_before, 20, 'first');
-                        temp_value_before_transform.(field_name).temp_value_sample = temp_value_before(1:min(10,end), 1:min(3,end));
-                        temp_value_before_transform.(field_name).temp_value_shape = size(temp_value_before);
-                        if size(temp_value_before,1) > 0
-                            first_timepoint_values = temp_value_before(:,1);
-                            temp_value_before_transform.(field_name).mean_t1 = mean(first_timepoint_values, 'omitnan');
-                            temp_value_before_transform.(field_name).std_t1 = std(first_timepoint_values, 'omitnan');
-                            temp_value_before_transform.(field_name).first_few_voxels_t1 = first_timepoint_values(1:min(5, length(first_timepoint_values)));
-                        end
-                    end
-                    
                     atlased_data=zeros(fnc_rawdata_len,atl_len,"double");
                     fnc_pro_atlas_masks_flat=fnc_pro_atlas_masks(:);
                     fnc_data_flat=reshape(fnc_data,fnc_pro_atlas_size(1)*fnc_pro_atlas_size(2)*fnc_pro_atlas_size(3),fnc_rawdata_len);
-                    
-                    % Track: step 1 - input data before ROI extraction (reduced data)
-                    atlased_tracking.step1_fnc_data_shape = size(fnc_data);
-                    atlased_tracking.step1_atlas_masks_shape = size(fnc_pro_atlas_masks);
-                    atlased_tracking.step1_atlas_flat_shape = size(fnc_pro_atlas_masks_flat);
-                    atlased_tracking.step1_fnc_data_flat_shape = size(fnc_data_flat);
-                    atlased_tracking.step1_atlased_data_init_shape = size(atlased_data);
-                    
-                    % Store only first few values for verification
-                    atlased_tracking.step1_fnc_data_sample = fnc_data(1:min(5,end), 1:min(5,end), 1:min(5,end), 1:min(3,end));
-                    atlased_tracking.step1_atlas_masks_sample = fnc_pro_atlas_masks(1:min(10,end), 1:min(10,end), 1:min(10,end));
-                    atlased_tracking.step1_atlas_flat_sample = fnc_pro_atlas_masks_flat(1:min(100,end));
-                    atlased_tracking.step1_fnc_data_flat_sample = fnc_data_flat(1:min(100,end), 1:min(3,end));
-                    
-                    % --- TRACK: Save temp_value AFTER resampling/transformation for comparison ---
-                    temp_value_after_transform = struct();
-                    for roi_idx = 1:min(5, atl_len)  % Only track first 5 ROIs
-                        temp_pos_after = fnc_pro_atlas_masks_flat == roi_idx;
-                        temp_value_after = fnc_data_flat(temp_pos_after, :);
-                        field_name = ['roi_', num2str(roi_idx)];
-                        temp_value_after_transform.(field_name).voxel_count = sum(temp_pos_after);
-                        temp_value_after_transform.(field_name).temp_pos_indices = find(temp_pos_after, 20, 'first');
-                        temp_value_after_transform.(field_name).temp_value_sample = temp_value_after(1:min(10,end), 1:min(3,end));
-                        temp_value_after_transform.(field_name).temp_value_shape = size(temp_value_after);
-                        if size(temp_value_after,1) > 0
-                            first_timepoint_values = temp_value_after(:,1);
-                            temp_value_after_transform.(field_name).mean_t1 = mean(first_timepoint_values, 'omitnan');
-                            temp_value_after_transform.(field_name).std_t1 = std(first_timepoint_values, 'omitnan');
-                            temp_value_after_transform.(field_name).first_few_voxels_t1 = first_timepoint_values(1:min(5, length(first_timepoint_values)));
-                        end
-                    end
                     
                     for ii=1:atl_len
                         process_d.Value=(i-0.8+0.2*ii/atl_len)/fnc_pro_filelength;
@@ -912,15 +845,6 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                         disp(['ROI ', num2str(ii), ': ', num2str(voxel_count), ' voxels']);
                         
                         temp_value=fnc_data_flat(temp_pos,:);
-                        
-                        % Track: step 2 - ROI extraction details for each ROI (reduced data)
-                        if ii <= 5  % Only track first 5 ROIs to avoid excessive data
-                            roi_field = ['step2_roi_', num2str(ii)];
-                            atlased_tracking.(roi_field).voxel_count = voxel_count;
-                            atlased_tracking.(roi_field).temp_pos_indices = find(temp_pos, 20, 'first');  % Only first 20 indices
-                            atlased_tracking.(roi_field).temp_value_sample = temp_value(1:min(10,end), 1:min(3,end));  % Only first 10 voxels, 3 timepoints
-                            atlased_tracking.(roi_field).temp_value_shape = size(temp_value);
-                        end
                         
                         if voxel_count > 0
                             % Print first few voxel values and statistics for comparison
@@ -937,22 +861,8 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                         %temp_value=temp_value(temp_value>0);    % Remove Zeros in calculating the mean.
                         roi_timeseries = mean(temp_value,'omitnan');
                         atlased_data(:,ii) = roi_timeseries;
-                        
-                        % Track: step 3 - final ROI timeseries for each ROI (reduced data)
-                        if ii <= 5  % Only track first 5 ROIs to avoid excessive data
-                            roi_field = ['step3_roi_', num2str(ii)];
-                            atlased_tracking.(roi_field).roi_timeseries_sample = roi_timeseries(1:min(10,end));  % Only first 10 timepoints
-                            atlased_tracking.(roi_field).roi_timeseries_shape = size(roi_timeseries);
-                            atlased_tracking.(roi_field).atlased_data_column_sample = atlased_data(1:min(10,end), ii);  % Only first 10 timepoints
-                        end
                     end
                     disp(['Final atlased_data shape: ', num2str(size(atlased_data,1)), ' x ', num2str(size(atlased_data,2))]);
-                    
-                    % Track: step 4 - final atlased_data (reduced data)
-                    atlased_tracking.step4_final_atlased_data_shape = size(atlased_data);
-                    atlased_tracking.step4_final_atlased_data_sample = atlased_data(1:min(10,end), 1:min(5,end));  % First 10 timepoints, first 5 ROIs
-                    atlased_tracking.step4_final_atlased_data_stats.mean_per_roi = mean(atlased_data, 1, 'omitnan');
-                    atlased_tracking.step4_final_atlased_data_stats.std_per_roi = std(atlased_data, 0, 1, 'omitnan');
                 elseif app.FileFormatDropDown.Value==2
                     temp_data=load(fnc_in_file);
                     temp_data=struct2cell(temp_data);
@@ -1028,13 +938,6 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                 subj_data.d_stepsize=app.gatp_setting.step_size;
                 subj_data.d_kernel=app.gatp_setting.kernel;
                 subj_data.d_atlas_list=app.gatp_setting.atlas_list;
-                
-                % Add atlased_data tracking to output
-                subj_data.atlased_tracking = atlased_tracking;
-                
-                % Add temp_value before and after transformation tracking
-                subj_data.temp_value_before_transform = temp_value_before_transform;
-                subj_data.temp_value_after_transform = temp_value_after_transform;
                 
                 % Add intermediate data tracking for resampling/transformation isolation
                 subj_data.intermediate_data = intermediate_data;
