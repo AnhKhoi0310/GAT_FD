@@ -433,6 +433,7 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                 end                
                 fnc_pro_atlas_size=size(fnc_pro_atlas_masks);
                 fnc_pro_atlas_invtran=invert(fnc_pro_atlas_info.Transform);
+                disp("fnc_pro_atlas_innvtran: "); disp(fnc_pro_atlas_invtran);
                 fnc_window_size=app.gatp_setting.window_size;
             elseif app.FileFormatDropDown.Value==2
                 atl_len=length(app.gatp_setting.atlas_list);

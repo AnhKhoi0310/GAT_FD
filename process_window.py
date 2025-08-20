@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import QWidget, QLabel,QComboBox, QFileDialog, QPushButton,
 from PyQt6.QtGui import QIntValidator 
 from nilearn.input_data import NiftiLabelsMasker
 from nilearn.image import resample_to_img
-
+from nibabel.processing import resample_from_to
 class ProcessWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -569,54 +569,36 @@ class ProcessWindow(QWidget):
                 expected_output_shape = tuple(int(np.ceil(dim / voxel)) for dim, voxel in zip(func_phys_dims, atlas_voxel_size))
                 print("Expected output shape (calculated):", expected_output_shape)
                 
-                # --- Use nibabel.processing.resample_from_to to match MATLAB imwarp OutputView ---
-                from nibabel.processing import resample_from_to
-                func_first_vol_img = nib.Nifti1Image(func_data[..., 0], func_affine)
+                # --- STEP 1: Apply functional image's own transform (like MATLAB first imwarp) ---
+                # In MATLAB: fnc_rawdata_t=imwarp(fnc_rawdata(:,:,:,1),fnc_rawdata_info.Transform);
+                # fnc_rawdata(:,:,:,1) = func_data[..., 0], fnc_rawdata_info.Transform = func_affine
+                fnc_rawdata_t = nib.Nifti1Image(func_data[..., 0], func_affine)
+                
+                # --- STEP 2: Apply atlas transformation (like MATLAB second imwarp) ---
+                # In MATLAB: fnc_rawdata_tt=imwarp(fnc_rawdata_t,fnc_pro_atlas_invtran);
+                # This is where shape changes to match atlas space
                 
                 # Create a reference image with the expected output shape and atlas voxel size
-                # This will force resample_from_to to produce the expected shape
                 expected_affine = atlas_affine.copy()
                 atlas_ref_img = nib.Nifti1Image(np.zeros(expected_output_shape, dtype=np.float32), expected_affine)
-                
-                resampled_img = resample_from_to(func_first_vol_img, atlas_ref_img, order=3)
-                fnc_rawdata_t = resampled_img.get_fdata()
-                print('fnc_rawdata_t shape (resampled to expected grid):', fnc_rawdata_t.shape)
+                print("atlas_ref_img",atlas_ref_img.shape, atlas_ref_img.affine)
+                resampled_img = resample_from_to(fnc_rawdata_t, atlas_ref_img, order=1)
+                fnc_rawdata_tt = resampled_img.get_fdata()
+                print('fnc_rawdata_t shape (after func transform, should match original):', fnc_rawdata_t.get_fdata().shape)
+                print('fnc_rawdata_tt shape (after atlas transform, shape changed):', fnc_rawdata_tt.shape)
                 print('atlas (target) shape:', atlas_data.shape)
-                print('Expected vs actual shape match:', expected_output_shape == fnc_rawdata_t.shape)
-                
-                # DEBUG: Compare fnc_rawdata_t with original func_data to detect transformation effects
-                print('=== TRANSFORMATION EFFECT ANALYSIS ===')
-                print(f'Original func_data[..., 0] shape: {func_data[..., 0].shape}')
-                print(f'fnc_rawdata_t (transformed) shape: {fnc_rawdata_t.shape}')
-                print(f'Original func_data min/max: {np.min(func_data[..., 0]):.6f} / {np.max(func_data[..., 0]):.6f}')
-                print(f'fnc_rawdata_t min/max: {np.min(fnc_rawdata_t):.6f} / {np.max(fnc_rawdata_t):.6f}')
-                
-                # Check if shapes allow direct comparison
-                if func_data[..., 0].shape == fnc_rawdata_t.shape:
-                    diff = np.abs(func_data[..., 0] - fnc_rawdata_t)
-                    print(f'Direct comparison possible - Max difference: {np.max(diff):.6f}')
-                    print(f'Mean difference: {np.mean(diff):.6f}')
-                    print(f'Are they essentially identical? {np.allclose(func_data[..., 0], fnc_rawdata_t, rtol=1e-6)}')
-                else:
-                    print('Direct comparison not possible due to shape difference')
-                    
-                # Sample comparison in center region for both
-                center_orig = [s//2 for s in func_data.shape[:3]]
-                center_trans = [s//2 for s in fnc_rawdata_t.shape[:3]]
-                orig_sample = func_data[center_orig[0]-2:center_orig[0]+3, center_orig[1]-2:center_orig[1]+3, center_orig[2], 0]
-                trans_sample = fnc_rawdata_t[center_trans[0]-2:center_trans[0]+3, center_trans[1]-2:center_trans[1]+3, center_trans[2]]
-                print(f'Original center sample (5x5): mean={np.mean(orig_sample):.6f}, std={np.std(orig_sample):.6f}')
-                print(f'Transformed center sample (5x5): mean={np.mean(trans_sample):.6f}, std={np.std(trans_sample):.6f}')
-                print('=' * 50)
+                print('Expected vs actual shape match:', expected_output_shape == fnc_rawdata_tt.shape)
                 
                 # Debug output to match MATLAB format
                 print("Atlas array shape:")
                 print(f"   {atlas_data.shape[0]}   {atlas_data.shape[1]}   {atlas_data.shape[2]}")
                 print()
-                print("fnc_rawdata_t:")
-                print("resampled_func (after 2-step transformation):")
+                print("fnc_rawdata_t (after func transform, unchanged):")
+                print(f"   {fnc_rawdata_t.get_fdata().shape[0]}   {fnc_rawdata_t.get_fdata().shape[1]}   {fnc_rawdata_t.get_fdata().shape[2]}")
+                print()
+                print("fnc_rawdata_tt (after atlas transform, shape changed):")
                 print("Before shift/trim:")
-                print(f"   {fnc_rawdata_t.shape[0]}   {fnc_rawdata_t.shape[1]}   {fnc_rawdata_t.shape[2]}")
+                print(f"   {fnc_rawdata_tt.shape[0]}   {fnc_rawdata_tt.shape[1]}   {fnc_rawdata_tt.shape[2]}")
                 print()
                 print(f"   {atlas_data.shape[0]}   {atlas_data.shape[1]}   {atlas_data.shape[2]}")
                 print()
@@ -651,7 +633,8 @@ class ProcessWindow(QWidget):
                             results[f'dx{dim_name.lower()}e'] = dxe
                     return results
                 
-                indices = get_matlab_style_indices(fnc_rawdata_t.shape, atlas_data.shape)
+                # Calculate shift indices like MATLAB for comparison (use fnc_rawdata_tt)
+                indices = get_matlab_style_indices(fnc_rawdata_tt.shape, atlas_data.shape)
                 print("--- Cropping/shift indices summary (Python equivalent) ---")
                 print(f"axs: {indices.get('axxs', 'N/A')} to {indices.get('axxs', 0) + atlas_data.shape[0] - 1 if 'axxs' in indices else 'N/A'}")
                 print(f"ays: {indices.get('axys', 'N/A')} to {indices.get('axys', 0) + atlas_data.shape[1] - 1 if 'axys' in indices else 'N/A'}")
@@ -660,13 +643,19 @@ class ProcessWindow(QWidget):
                 print(f"dys: {indices.get('dxys', 'N/A')} to {indices.get('dxye', 'N/A')}")
                 print(f"dzs: {indices.get('dxzs', 'N/A')} to {indices.get('dxze', 'N/A')}")
                 
-                # Use resample_from_to for all timepoints to match MATLAB's imwarp OutputView behavior
+                # Apply two-step transformation to all timepoints to match MATLAB behavior
+                # Step 1: Apply functional transform (no shape change, like MATLAB)
+                # Step 2: Apply atlas transform (shape changes to match expected_output_shape)
                 resampled_func = np.zeros(expected_output_shape + (func_data.shape[3],), dtype=func_data.dtype)
                 for t in range(func_data.shape[3]):
-                    func_vol_img = nib.Nifti1Image(func_data[..., t], func_affine)
-                    resampled_img = resample_from_to(func_vol_img, atlas_ref_img, order=1)
+                    # Step 1: Apply functional image's own transform (create NIfTI image like MATLAB)
+                    fnc_rawdata_t_vol = nib.Nifti1Image(func_data[..., t], func_affine)
+                    
+                    # Step 2: Apply atlas transformation (shape changes)
+                    resampled_img = resample_from_to(fnc_rawdata_t_vol, atlas_ref_img, order=1)
                     resampled_func[..., t] = resampled_img.get_fdata()
-                print('Resampled func_data shape:', resampled_func.shape)
+                print('Resampled func_data shape (after 2-step transform):', resampled_func.shape)
+                
                 # Also resample the atlas to the same grid
                 atlas_img_nib = nib.Nifti1Image(atlas_data, atlas_affine)
                 resampled_atlas_img = resample_from_to(atlas_img_nib, atlas_ref_img, order=0)  # nearest neighbor for labels
@@ -676,41 +665,51 @@ class ProcessWindow(QWidget):
                 # --- SAVE INTERMEDIATE DATA 1: After resampling, before cropping ---
                 # Use same center region for consistency
                 # Use np.round to match MATLAB's round() function
-                center_x_r = int(np.ceil(resampled_func.shape[0]/2))
-                center_y_r = int(np.ceil(resampled_func.shape[1]/2))
-                center_z_r = int(np.ceil(resampled_func.shape[2]/2))
-                x_start_r, x_end_r = max(0, center_x_r-10), min(resampled_func.shape[0], center_x_r+10)
-                y_start_r, y_end_r = max(0, center_y_r-10), min(resampled_func.shape[1], center_y_r+10)
-                z_start_r, z_end_r = max(0, center_z_r-5), min(resampled_func.shape[2], center_z_r+5)
-                
+                center_x_r = int(np.ceil(fnc_rawdata_tt.shape[0]/2))
+                center_y_r = int(np.ceil(fnc_rawdata_tt.shape[1]/2))
+                center_z_r = int(np.ceil(fnc_rawdata_tt.shape[2]/2))
+                x_start_r, x_end_r = max(0, center_x_r-10), min(fnc_rawdata_tt.shape[0], center_x_r+10)
+                y_start_r, y_end_r = max(0, center_y_r-10), min(fnc_rawdata_tt.shape[1], center_y_r+10)
+                z_start_r, z_end_r = max(0, center_z_r-5), min(fnc_rawdata_tt.shape[2], center_z_r+5)
+                print(f"Sample region (Python 0-based): [{x_start_r}:{x_end_r}, {y_start_r}:{y_end_r}, {z_start_r}:{z_end_r}]")
+                print(f"Sample region (MATLAB equivalent 1-based): [{x_start_r+1}:{x_end_r}, {y_start_r+1}:{y_end_r}, {z_start_r+1}:{z_end_r}]")
                 intermediate_data['step1_after_resample'] = {
-                    'func_shape': resampled_func.shape,  # 4D - all timepoints (final data)
-                    'func_first_shape': resampled_func[..., 0].shape,  # 3D - first timepoint (MATLAB comparison)
-                    'atlas_shape': resampled_atlas.shape,
-                    'fnc_rawdata_t_shape': fnc_rawdata_t.shape,  # 3D - equivalent to MATLAB fnc_rawdata_t
-                    'func_sample': resampled_func[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r, 0:min(3, resampled_func.shape[3])].astype(np.float32),
-                    'func_first_sample': resampled_func[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r, 0].astype(np.float32),
-                    'fnc_rawdata_t_sample': fnc_rawdata_t[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r].astype(np.float32),  # MATLAB fnc_rawdata_t equivalent
-                    'atlas_sample': resampled_atlas[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r].astype(np.float32),
-                    'func_dtype': str(resampled_func.dtype),
-                    'atlas_dtype': str(resampled_atlas.dtype),
-                    'fnc_rawdata_t_dtype': str(fnc_rawdata_t.dtype),
+                    'resampled_func_shape': resampled_func.shape,  # 4D - all timepoints (final data after 2-step transform)
+                    'resampled_func_first_shape': resampled_func[..., 0].shape,  # 3D - first timepoint 
+                    'fnc_rawdata_t_shape': fnc_rawdata_t.get_fdata().shape,  # 3D - after step 1 (unchanged like MATLAB)
+                    'fnc_rawdata_tt_shape': fnc_rawdata_tt.shape,  # 3D - after step 2 (shape changed like MATLAB)
+                    'resampled_atlas_shape': resampled_atlas.shape,
+                    'resampled_func_sample': resampled_func[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r, 0:min(3, resampled_func.shape[3])].astype(np.float32),
+                    'fnc_rawdata_t_sample': fnc_rawdata_t.get_fdata()[x_start_orig:x_end_orig, y_start_orig:y_end_orig, z_start_orig:z_end_orig].astype(np.float32),  # 3D - use same indices as step0
+                    'fnc_rawdata_tt_sample': fnc_rawdata_tt[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r].astype(np.float32),  # Step 2 (changed)
+                    'resampled_atlas_sample': resampled_atlas[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r].astype(np.float32),
+                    'resampled_func_dtype': str(resampled_func.dtype),
+                    'resampled_atlas_dtype': str(resampled_atlas.dtype),
+                    'fnc_rawdata_t_dtype': str(fnc_rawdata_t.get_fdata().dtype),
+                    'fnc_rawdata_tt_dtype': str(fnc_rawdata_tt.dtype),
                     'sample_region': f'[{x_start_r}:{x_end_r}, {y_start_r}:{y_end_r}, {z_start_r}:{z_end_r}]'
                 }
                 print("--- INTERMEDIATE DATA STEP 1: After resampling, before cropping ---")
-                print(f"resampled_func shape (4D - all timepoints): {resampled_func.shape}")
-                print(f"resampled_func first timepoint shape (3D - MATLAB comparison): {resampled_func[..., 0].shape}")
-                print(f"fnc_rawdata_t shape (3D - MATLAB equivalent): {fnc_rawdata_t.shape}")
-                print(f"Resampled atlas shape: {resampled_atlas.shape}")
+                print(f"fnc_rawdata_t shape (3D - after step 1, unchanged like MATLAB): {fnc_rawdata_t.get_fdata().shape}")
+                print(f"fnc_rawdata_tt shape (3D - after step 2, shape changed like MATLAB): {fnc_rawdata_tt.shape}")
+                print(f"resampled_func shape (4D - all timepoints after 2-step transform): {resampled_func.shape}")
+                print(f"resampled_atlas shape: {resampled_atlas.shape}")
                 print(f"Sample region (center brain): [{x_start_r}:{x_end_r}, {y_start_r}:{y_end_r}, {z_start_r}:{z_end_r}]")
+                
+                # Verify the two-step process matches MATLAB behavior
+                print(f"Step 1 verification - fnc_rawdata_t unchanged: {fnc_rawdata_t.get_fdata().shape == func_data[..., 0].shape}")
+                print(f"Step 2 verification - fnc_rawdata_tt shape changed: {fnc_rawdata_tt.shape == expected_output_shape}")
+                print(f"Final verification - resampled_func matches fnc_rawdata_tt: {np.allclose(fnc_rawdata_tt, resampled_func[..., 0])}")
+                # Check sample regions for debugging
                 resampled_func_sample_region = resampled_func[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r, 0]
                 print(f"resampled_func sample (first timepoint) min/max: {np.min(resampled_func_sample_region):.6f} / {np.max(resampled_func_sample_region):.6f}")
-                fnc_rawdata_t_sample_region = fnc_rawdata_t[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r]
-                print(f"fnc_rawdata_t sample min/max: {np.min(fnc_rawdata_t_sample_region):.6f} / {np.max(fnc_rawdata_t_sample_region):.6f}")
-                print(f"fnc_rawdata_t vs resampled_func[...,0] match: {np.allclose(fnc_rawdata_t, resampled_func[..., 0])}")
+                fnc_rawdata_t_sample_region = fnc_rawdata_t.get_fdata()[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r]
+                print(f"fnc_rawdata_t sample (unchanged) min/max: {np.min(fnc_rawdata_t_sample_region):.6f} / {np.max(fnc_rawdata_t_sample_region):.6f}")
+                fnc_rawdata_tt_sample_region = fnc_rawdata_tt[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r]
+                print(f"fnc_rawdata_tt sample (shape changed) min/max: {np.min(fnc_rawdata_tt_sample_region):.6f} / {np.max(fnc_rawdata_tt_sample_region):.6f}")
                 resampled_atlas_sample_region = resampled_atlas[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r]
                 print(f"Resampled atlas sample unique labels: {np.unique(resampled_atlas_sample_region)}")
-                print(f"Data consistency confirmed - using resampled_func (4D) for final processing")
+                print("Two-step transformation complete - using resampled_func (4D) for final processing")
                 
                 # --- Apply MATLAB-style cropping using the calculated indices ---
                 # Use the calculated MATLAB-style indices to crop exactly like MATLAB

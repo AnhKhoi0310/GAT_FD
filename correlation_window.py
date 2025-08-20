@@ -128,6 +128,10 @@ class CorrWindow(QMainWindow):
         
         main_layout.addWidget(results_splitter)
         
+        # Status info
+        self.status_label = QLabel('Ready. Select two .mat files to compare (supports 2D, 3D, and 4D functional data).')
+        main_layout.addWidget(self.status_label)
+        
     def select_file1(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self, 'Select Dataset 1 (.mat file)', '', 'MATLAB Files (*.mat);;All Files (*)')
