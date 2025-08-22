@@ -584,6 +584,8 @@ class ProcessWindow(QWidget):
                 print("atlas_ref_img",atlas_ref_img.shape, atlas_ref_img.affine)
                 resampled_img = resample_from_to(fnc_rawdata_t, atlas_ref_img, order=1)
                 fnc_rawdata_tt = resampled_img.get_fdata()
+                fnc_rawdata_tt = np.flip(fnc_rawdata_tt, axis = 0)  # Flip axes to match MATLAB orientation
+                fnc_rawdata_tt = np.flip(fnc_rawdata_tt, axis = 1)  # Flip axes to match MATLAB orientation
                 print('fnc_rawdata_t shape (after func transform, should match original):', fnc_rawdata_t.get_fdata().shape)
                 print('fnc_rawdata_tt shape (after atlas transform, shape changed):', fnc_rawdata_tt.shape)
                 print('atlas (target) shape:', atlas_data.shape)
@@ -681,7 +683,7 @@ class ProcessWindow(QWidget):
                     'resampled_atlas_shape': resampled_atlas.shape,
                     'resampled_func_sample': resampled_func[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r, 0:min(3, resampled_func.shape[3])].astype(np.float32),
                     'fnc_rawdata_t_sample': fnc_rawdata_t.get_fdata()[x_start_orig:x_end_orig, y_start_orig:y_end_orig, z_start_orig:z_end_orig].astype(np.float32),  # 3D - use same indices as step0
-                    'fnc_rawdata_tt_sample': fnc_rawdata_tt[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r].astype(np.float32),  # Step 2 (changed)
+                    'fnc_rawdata_tt_sample': fnc_rawdata_tt[:, :, 100].astype(np.float32),  # Step 2 (changed)
                     'resampled_atlas_sample': resampled_atlas[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r].astype(np.float32),
                     'resampled_func_dtype': str(resampled_func.dtype),
                     'resampled_atlas_dtype': str(resampled_atlas.dtype),

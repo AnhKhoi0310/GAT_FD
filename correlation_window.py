@@ -83,6 +83,15 @@ class CorrWindow(QMainWindow):
         
         main_layout.addWidget(file_section)
         
+        # Analysis type selection
+        analysis_layout = QHBoxLayout()
+        analysis_layout.addWidget(QLabel('Analysis Type:'))
+        self.analysis_combo = QComboBox()
+        self.analysis_combo.addItems(['Correlation Analysis', 'Point-to-Point Difference'])
+        self.analysis_combo.currentIndexChanged.connect(self.analysis_type_changed)
+        analysis_layout.addWidget(self.analysis_combo)
+        main_layout.addLayout(analysis_layout)
+        
         # Control buttons
         button_layout = QHBoxLayout()
         self.load_button = QPushButton('Load Data')
@@ -355,18 +364,23 @@ class CorrWindow(QMainWindow):
             return
             
         try:
-            if self.data1.ndim == 2:
-                # 2D data: (time x regions)
-                self._calculate_correlations_2d()
-            elif self.data1.ndim == 3:
-                # 3D data: (time x regions x subjects)
-                self._calculate_correlations_3d()
-            else:
-                # 4D data: (time x regions x subjects x samples)
-                self._calculate_correlations_4d()
+            analysis_type = self.analysis_combo.currentIndex()
+            
+            if analysis_type == 0:  # Correlation Analysis
+                if self.data1.ndim == 2:
+                    # 2D data: (time x regions)
+                    self._calculate_correlations_2d()
+                elif self.data1.ndim == 3:
+                    # 3D data: (time x regions x subjects)
+                    self._calculate_correlations_3d()
+                else:
+                    # 4D data: (time x regions x subjects x samples)
+                    self._calculate_correlations_4d()
+            else:  # Point-to-Point Difference
+                self._calculate_point_differences()
                 
         except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Error calculating correlations: {str(e)}')
+            QMessageBox.critical(self, 'Error', f'Error calculating analysis: {str(e)}')
     
     def _calculate_correlations_2d(self):
         """Calculate correlations for 2D data (time x regions)."""
@@ -466,6 +480,51 @@ class CorrWindow(QMainWindow):
         
         # Display results and calculate summary
         self._display_and_summarize_results()
+    
+    def _calculate_point_differences(self):
+        """Calculate point-to-point differences between two datasets."""
+        # Calculate element-wise differences
+        differences = self.data2 - self.data1
+        absolute_differences = differences
+        
+        # Calculate statistics
+        mean_diff = np.mean(differences)
+        mean_abs_diff = np.mean(absolute_differences)
+        max_diff = np.max(absolute_differences)
+        min_diff = np.min(absolute_differences)
+        std_diff = np.std(differences)
+        rmse = np.sqrt(np.mean(differences**2))
+        
+        # Calculate relative error (avoiding division by zero)
+        data1_nonzero = self.data1[self.data1 != 0]
+        data2_nonzero = self.data2[self.data1 != 0]
+        if len(data1_nonzero) > 0:
+            relative_errors = np.abs((data2_nonzero - data1_nonzero) / data1_nonzero) * 100
+            mean_relative_error = np.mean(relative_errors)
+            max_relative_error = np.max(relative_errors)
+        else:
+            mean_relative_error = np.nan
+            max_relative_error = np.nan
+        
+        # Store results for display
+        self.analysis_type = "Point-to-Point Difference"
+        self.differences = differences
+        self.absolute_differences = absolute_differences
+        self.difference_stats = {
+            'mean_difference': mean_diff,
+            'mean_absolute_difference': mean_abs_diff,
+            'max_absolute_difference': max_diff,
+            'min_absolute_difference': min_diff,
+            'std_difference': std_diff,
+            'rmse': rmse,
+            'mean_relative_error_percent': mean_relative_error,
+            'max_relative_error_percent': max_relative_error,
+            'total_elements': self.data1.size,
+            'shape': self.data1.shape
+        }
+        
+        # Display results
+        self._display_difference_results()
     
     def _display_and_summarize_results(self):
         """Display results in table and calculate summary statistics."""
@@ -689,20 +748,18 @@ Correlations > 0.99: {np.sum(valid_corrs > 0.99)}"""
         self.results_table.resizeColumnsToContents()
         
     def save_results(self):
-        if not hasattr(self, 'correlations'):
-            QMessageBox.warning(self, 'Warning', 'No results to save. Calculate correlations first.')
+        if not hasattr(self, 'correlations') and not hasattr(self, 'differences'):
+            QMessageBox.warning(self, 'Warning', 'No results to save. Calculate analysis first.')
             return
             
         file_path, _ = QFileDialog.getSaveFileName(
-            self, 'Save Correlation Results', 'correlation_results.mat', 'MATLAB Files (*.mat)')
+            self, 'Save Analysis Results', 'analysis_results.mat', 'MATLAB Files (*.mat)')
         
         if file_path:
             try:
-                # Prepare results for saving
+                # Prepare basic results structure
                 results = {
-                    'correlations': self.correlations,
-                    'p_values': self.p_values,
-                    'correlation_type': self.correlation_type,
+                    'analysis_type': getattr(self, 'analysis_type', 'Unknown'),
                     'data_dimensions': f"{self.data1.ndim}D",
                     'dataset1_info': {
                         'file': os.path.basename(self.file1_path),
@@ -716,68 +773,81 @@ Correlations > 0.99: {np.sum(valid_corrs > 0.99)}"""
                     }
                 }
                 
-                # Add appropriate indexing based on data dimensions
-                if self.correlations.ndim == 1:
-                    results['region_numbers'] = np.arange(1, len(self.correlations) + 1)
-                    results['summary_stats'] = {
-                        'n_regions': len(self.correlations),
-                        'n_valid': np.sum(~np.isnan(self.correlations)),
-                        'mean_correlation': np.nanmean(self.correlations),
-                        'std_correlation': np.nanstd(self.correlations),
-                        'min_correlation': np.nanmin(self.correlations),
-                        'max_correlation': np.nanmax(self.correlations)
-                    }
-                elif self.correlations.ndim == 2:
-                    # For 3D results, create region and subject indices
-                    n_regions, n_subjects = self.correlations.shape
-                    region_idx, subject_idx = np.meshgrid(
-                        np.arange(1, n_regions + 1), 
-                        np.arange(1, n_subjects + 1), 
-                        indexing='ij'
-                    )
-                    results['region_indices'] = region_idx
-                    results['subject_indices'] = subject_idx
-                    results['summary_stats'] = {
-                        'n_regions': n_regions,
-                        'n_subjects': n_subjects,
-                        'total_comparisons': self.correlations.size,
-                        'n_valid': np.sum(~np.isnan(self.correlations)),
-                        'mean_correlation': np.nanmean(self.correlations),
-                        'std_correlation': np.nanstd(self.correlations),
-                        'min_correlation': np.nanmin(self.correlations),
-                        'max_correlation': np.nanmax(self.correlations)
-                    }
-                else:
-                    # For 4D results, create region, subject, and sample indices
-                    n_regions, n_subjects, n_samples = self.correlations.shape
-                    region_idx = np.zeros(self.correlations.shape, dtype=int)
-                    subject_idx = np.zeros(self.correlations.shape, dtype=int)
-                    sample_idx = np.zeros(self.correlations.shape, dtype=int)
+                # Add analysis-specific results
+                if hasattr(self, 'correlations'):
+                    # Correlation analysis results
+                    results['correlations'] = self.correlations
+                    results['p_values'] = self.p_values
+                    results['correlation_type'] = self.correlation_type
                     
-                    for r in range(n_regions):
-                        for s in range(n_subjects):
-                            for sa in range(n_samples):
-                                region_idx[r, s, sa] = r + 1
-                                subject_idx[r, s, sa] = s + 1
-                                sample_idx[r, s, sa] = sa + 1
-                    
-                    results['region_indices'] = region_idx
-                    results['subject_indices'] = subject_idx
-                    results['sample_indices'] = sample_idx
-                    results['summary_stats'] = {
-                        'n_regions': n_regions,
-                        'n_subjects': n_subjects,
-                        'n_samples': n_samples,
-                        'total_comparisons': self.correlations.size,
-                        'n_valid': np.sum(~np.isnan(self.correlations)),
-                        'mean_correlation': np.nanmean(self.correlations),
-                        'std_correlation': np.nanstd(self.correlations),
-                        'min_correlation': np.nanmin(self.correlations),
-                        'max_correlation': np.nanmax(self.correlations)
-                    }
+                    # Add appropriate indexing based on data dimensions
+                    if self.correlations.ndim == 1:
+                        results['region_numbers'] = np.arange(1, len(self.correlations) + 1)
+                        results['summary_stats'] = {
+                            'n_regions': len(self.correlations),
+                            'n_valid': np.sum(~np.isnan(self.correlations)),
+                            'mean_correlation': np.nanmean(self.correlations),
+                            'std_correlation': np.nanstd(self.correlations),
+                            'min_correlation': np.nanmin(self.correlations),
+                            'max_correlation': np.nanmax(self.correlations)
+                        }
+                    elif self.correlations.ndim == 2:
+                        # For 3D results, create region and subject indices
+                        n_regions, n_subjects = self.correlations.shape
+                        region_idx, subject_idx = np.meshgrid(
+                            np.arange(1, n_regions + 1), 
+                            np.arange(1, n_subjects + 1), 
+                            indexing='ij'
+                        )
+                        results['region_indices'] = region_idx
+                        results['subject_indices'] = subject_idx
+                        results['summary_stats'] = {
+                            'n_regions': n_regions,
+                            'n_subjects': n_subjects,
+                            'total_comparisons': self.correlations.size,
+                            'n_valid': np.sum(~np.isnan(self.correlations)),
+                            'mean_correlation': np.nanmean(self.correlations),
+                            'std_correlation': np.nanstd(self.correlations),
+                            'min_correlation': np.nanmin(self.correlations),
+                            'max_correlation': np.nanmax(self.correlations)
+                        }
+                    else:
+                        # For 4D results, create region, subject, and sample indices
+                        n_regions, n_subjects, n_samples = self.correlations.shape
+                        region_idx = np.zeros(self.correlations.shape, dtype=int)
+                        subject_idx = np.zeros(self.correlations.shape, dtype=int)
+                        sample_idx = np.zeros(self.correlations.shape, dtype=int)
+                        
+                        for r in range(n_regions):
+                            for s in range(n_subjects):
+                                for sa in range(n_samples):
+                                    region_idx[r, s, sa] = r + 1
+                                    subject_idx[r, s, sa] = s + 1
+                                    sample_idx[r, s, sa] = sa + 1
+                        
+                        results['region_indices'] = region_idx
+                        results['subject_indices'] = subject_idx
+                        results['sample_indices'] = sample_idx
+                        results['summary_stats'] = {
+                            'n_regions': n_regions,
+                            'n_subjects': n_subjects,
+                            'n_samples': n_samples,
+                            'total_comparisons': self.correlations.size,
+                            'n_valid': np.sum(~np.isnan(self.correlations)),
+                            'mean_correlation': np.nanmean(self.correlations),
+                            'std_correlation': np.nanstd(self.correlations),
+                            'min_correlation': np.nanmin(self.correlations),
+                            'max_correlation': np.nanmax(self.correlations)
+                        }
+                
+                elif hasattr(self, 'differences'):
+                    # Point-to-point difference results
+                    results['differences'] = self.differences
+                    results['absolute_differences'] = self.absolute_differences
+                    results['difference_statistics'] = self.difference_stats
                 
                 # Save to MATLAB format
-                savemat(file_path, {'correlation_results': results})
+                savemat(file_path, {'analysis_results': results})
                 
                 QMessageBox.information(self, 'Success', f'Results saved to:\n{file_path}')
                 self.status_label.setText(f'Results saved to {os.path.basename(file_path)}')
@@ -821,5 +891,120 @@ Correlations > 0.99: {np.sum(valid_corrs > 0.99)}"""
                     pass
         
         return paths
+    
+    def analysis_type_changed(self):
+        """Update UI based on selected analysis type."""
+        analysis_type = self.analysis_combo.currentIndex()
+        if analysis_type == 0:  # Correlation Analysis
+            self.run_button.setText('Calculate Correlations')
+            self.status_label.setText('Ready. Select two .mat files to compare (supports 2D, 3D, and 4D functional data).')
+        else:  # Point-to-Point Difference
+            self.run_button.setText('Calculate Differences')
+            self.status_label.setText('Ready. Select two .mat files to compare point-to-point differences.')
+    
+    def _display_difference_results(self):
+        """Display point-to-point difference results."""
+        stats = self.difference_stats
+        
+        # Create summary text
+        summary = f"""
+Difference Analysis Summary:
+Data Shape: {stats['shape']}
+Total Elements Compared: {stats['total_elements']}
+
+Statistical Measures:
+Mean Difference: {stats['mean_difference']:.6f}
+Mean Absolute Difference: {stats['mean_absolute_difference']:.6f}
+Standard Deviation: {stats['std_difference']:.6f}
+Root Mean Square Error (RMSE): {stats['rmse']:.6f}
+
+Range:
+Maximum Absolute Difference: {stats['max_absolute_difference']:.6f}
+Minimum Absolute Difference: {stats['min_absolute_difference']:.6f}
+
+Relative Error (non-zero elements):
+Mean Relative Error: {stats['mean_relative_error_percent']:.3f}%
+Maximum Relative Error: {stats['max_relative_error_percent']:.3f}%
+
+Agreement Levels:
+Elements with difference < 0.001: {np.sum(self.absolute_differences < 0.001)}
+Elements with difference < 0.01: {np.sum(self.absolute_differences < 0.01)}
+Elements with difference < 0.1: {np.sum(self.absolute_differences < 0.1)}
+"""
+        
+        current_text = self.info_text.toPlainText()
+        self.info_text.setText(current_text + summary)
+        
+        # Create a difference table showing all elements in matrix order (not sorted)
+        if self.data1.ndim == 2:
+            # For 2D: show all time x region combinations
+            n_time, n_regions = self.data1.shape
+            total_rows = n_time * n_regions
+            
+            self.results_table.setRowCount(total_rows)
+            self.results_table.setColumnCount(4)
+            self.results_table.setHorizontalHeaderLabels(['Position (Time,Region)', 'Dataset1 Value', 'Dataset2 Value', 'Absolute Difference'])
+            
+            row = 0
+            for t in range(n_time):
+                for r in range(n_regions):
+                    pos_str = f"({t},{r})"
+                    val1 = self.data1[t, r]
+                    val2 = self.data2[t, r]
+                    diff = self.absolute_differences[t, r]
+                    
+                    self.results_table.setItem(row, 0, QTableWidgetItem(pos_str))
+                    self.results_table.setItem(row, 1, QTableWidgetItem(f'{val1:.6f}'))
+                    self.results_table.setItem(row, 2, QTableWidgetItem(f'{val2:.6f}'))
+                    self.results_table.setItem(row, 3, QTableWidgetItem(f'{diff:.6f}'))
+                    row += 1
+                    
+        elif self.data1.ndim == 3:
+            # For 3D: show first 2 dimensions (time x region) for first subject slice
+            n_time, n_regions, n_subjects = self.data1.shape
+            total_rows = n_time * n_regions
+            
+            self.results_table.setRowCount(total_rows)
+            self.results_table.setColumnCount(4)
+            self.results_table.setHorizontalHeaderLabels(['Position (Time,Region) - Subject 0', 'Dataset1 Value', 'Dataset2 Value', 'Absolute Difference'])
+            
+            row = 0
+            for t in range(n_time):
+                for r in range(n_regions):
+                    pos_str = f"({t},{r})"
+                    val1 = self.data1[t, r, 0]  # First subject
+                    val2 = self.data2[t, r, 0]  # First subject
+                    diff = self.absolute_differences[t, r, 0]  # First subject
+                    
+                    self.results_table.setItem(row, 0, QTableWidgetItem(pos_str))
+                    self.results_table.setItem(row, 1, QTableWidgetItem(f'{val1:.6f}'))
+                    self.results_table.setItem(row, 2, QTableWidgetItem(f'{val2:.6f}'))
+                    self.results_table.setItem(row, 3, QTableWidgetItem(f'{diff:.6f}'))
+                    row += 1
+                    
+        else:  # 4D
+            # For 4D: show first 2 dimensions (time x region) for first subject and first sample
+            n_time, n_regions, n_subjects, n_samples = self.data1.shape
+            total_rows = n_time * n_regions
+            
+            self.results_table.setRowCount(total_rows)
+            self.results_table.setColumnCount(4)
+            self.results_table.setHorizontalHeaderLabels(['Position (Time,Region) - Subj0,Samp0', 'Dataset1 Value', 'Dataset2 Value', 'Absolute Difference'])
+            
+            row = 0
+            for t in range(n_time):
+                for r in range(n_regions):
+                    pos_str = f"({t},{r})"
+                    val1 = self.data1[t, r, 0, 0]  # First subject, first sample
+                    val2 = self.data2[t, r, 0, 0]  # First subject, first sample
+                    diff = self.absolute_differences[t, r, 0, 0]  # First subject, first sample
+                    
+                    self.results_table.setItem(row, 0, QTableWidgetItem(pos_str))
+                    self.results_table.setItem(row, 1, QTableWidgetItem(f'{val1:.6f}'))
+                    self.results_table.setItem(row, 2, QTableWidgetItem(f'{val2:.6f}'))
+                    self.results_table.setItem(row, 3, QTableWidgetItem(f'{diff:.6f}'))
+                    row += 1
+        self.save_button.setEnabled(True)
+        self.status_label.setText('Point-to-point differences calculated successfully. Results shown in table.')
 
 
