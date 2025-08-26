@@ -1,0 +1,11 @@
+numpy
+scipy
+pandas
+h5py
+PyQt6
+matplotlib
+joblib
+bctpy
+nibabel
+pywt
+nilearn
