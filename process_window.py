@@ -639,65 +639,25 @@ class ProcessWindow(QWidget):
                 print(f"dys: {indices.get('dxys', 'N/A')} to {indices.get('dxye', 'N/A')}")
                 print(f"dzs: {indices.get('dxzs', 'N/A')} to {indices.get('dxze', 'N/A')}")
                 
-                # Import our MATLAB-compatible imwarp implementation
-                import sys
-                sys.path.append('/Users/cnn1/Desktop/GAT_FD')
-                from matlab_imwarp import matlab_imwarp_3d, ImRef3D
-                
-                print("=== Using MATLAB-compatible imwarp implementation ===")
-                
-                # Convert NIfTI affine matrices to MATLAB-style transformation matrices
-                # Extract transformation from NIfTI header (if available)
-                func_transform = func_img.affine if hasattr(func_img, 'affine') else np.eye(4)
-                atlas_transform = atlas_nib.affine if hasattr(atlas_nib, 'affine') else np.eye(4)
-                
-                print(f"Functional transform matrix:\n{func_transform}")
-                print(f"Atlas transform matrix:\n{atlas_transform}")
-                
-                # Calculate inverse transformation for atlas-to-functional mapping
-                atlas_to_func_transform = np.linalg.inv(atlas_transform) @ func_transform
-                
-                print(f"Atlas-to-functional transform:\n{atlas_to_func_transform}")
-                
-                # Create output spatial referencing to match expected output shape
-                output_ref = ImRef3D(expected_output_shape)
-                
-                # Apply two-step transformation to all timepoints to match MATLAB's imwarp behavior
+                # Apply two-step transformation to all timepoints to match MATLAB behavior
+                # Step 1: Apply functional transform (no shape change, like MATLAB)
+                # Step 2: Apply atlas transform (shape changes to match expected_output_shape)
                 resampled_func = np.zeros(expected_output_shape + (func_data.shape[3],), dtype=func_data.dtype)
                 for t in range(func_data.shape[3]):
-                    print(f"Processing timepoint {t+1}/{func_data.shape[3]} with MATLAB imwarp")
+                    # Step 1: Apply functional image's own transform (keep original shape)
+                    fnc_rawdata_t_vol = func_data[..., t].copy()  # No transformation like MATLAB
                     
-                    # Step 1: Apply functional image's own transform (fnc_rawdata_t = imwarp(fnc_rawdata(:,:,:,t), transform))
-                    func_vol = func_data[..., t]
-                    func_transformed, _ = matlab_imwarp_3d(
-                        func_vol,
-                        func_transform,
-                        output_view=None,  # Use default (same size)
-                        method='linear'
-                    )
-                    
-                    # Step 2: Apply atlas transformation (fnc_rawdata_tt = imwarp(fnc_rawdata_t, atlas_inv_transform))
-                    func_final, _ = matlab_imwarp_3d(
-                        func_transformed,
-                        atlas_to_func_transform,
-                        output_view=output_ref,  # Use target output size
-                        method='linear'
-                    )
-                    
-                    resampled_func[..., t] = func_final
+                    # Step 2: Apply atlas transformation (shape changes)
+                    func_vol_img = nib.Nifti1Image(fnc_rawdata_t_vol, func_affine)
+                    resampled_img = resample_from_to(func_vol_img, atlas_ref_img, order=1)
+                    resampled_func[..., t] = resampled_img.get_fdata()
+                print('Resampled func_data shape (after 2-step transform):', resampled_func.shape)
                 
-                print('Resampled func_data shape (using MATLAB imwarp):', resampled_func.shape)
-                
-                # Also transform the atlas using the same approach
-                print("Transforming atlas with MATLAB imwarp...")
-                resampled_atlas, _ = matlab_imwarp_3d(
-                    atlas_data.astype(np.float32),
-                    atlas_to_func_transform,
-                    output_view=output_ref,
-                    method='nearest'  # Use nearest neighbor for label data
-                )
-                resampled_atlas = resampled_atlas.astype(np.int32)
-                print('Resampled atlas shape (using MATLAB imwarp):', resampled_atlas.shape)
+                # Also resample the atlas to the same grid
+                atlas_img_nib = nib.Nifti1Image(atlas_data, atlas_affine)
+                resampled_atlas_img = resample_from_to(atlas_img_nib, atlas_ref_img, order=0)  # nearest neighbor for labels
+                resampled_atlas = resampled_atlas_img.get_fdata().astype(np.int32)
+                print('Resampled atlas shape:', resampled_atlas.shape)
                 
                 # --- SAVE INTERMEDIATE DATA 1: After resampling, before cropping ---
                 # Use same center region for consistency
