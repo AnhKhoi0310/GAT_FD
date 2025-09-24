@@ -569,24 +569,18 @@ class ProcessWindow(QWidget):
                 expected_output_shape = tuple(int(np.ceil(dim / voxel)) for dim, voxel in zip(func_phys_dims, atlas_voxel_size))
                 print("Expected output shape (calculated):", expected_output_shape)
                 
-                # --- STEP 1: Apply functional image's own transform (like MATLAB first imwarp) ---
-                # In MATLAB: fnc_rawdata_t=imwarp(fnc_rawdata(:,:,:,1),fnc_rawdata_info.Transform);
-                # fnc_rawdata(:,:,:,1) = func_data[..., 0], fnc_rawdata_info.Transform = func_affine
-                fnc_rawdata_t = nib.Nifti1Image(func_data[..., 0], func_affine)
-                
+                fnc_rawdata_t = func_data[..., 0].copy() 
                 # --- STEP 2: Apply atlas transformation (like MATLAB second imwarp) ---
                 # In MATLAB: fnc_rawdata_tt=imwarp(fnc_rawdata_t,fnc_pro_atlas_invtran);
                 # This is where shape changes to match atlas space
+                func_first_vol_img = nib.Nifti1Image(fnc_rawdata_t, func_affine)
                 
                 # Create a reference image with the expected output shape and atlas voxel size
                 expected_affine = atlas_affine.copy()
                 atlas_ref_img = nib.Nifti1Image(np.zeros(expected_output_shape, dtype=np.float32), expected_affine)
-                print("atlas_ref_img",atlas_ref_img.shape, atlas_ref_img.affine)
-                resampled_img = resample_from_to(fnc_rawdata_t, atlas_ref_img, order=1)
+                
+                resampled_img = resample_from_to(func_first_vol_img, atlas_ref_img, order=3)
                 fnc_rawdata_tt = resampled_img.get_fdata()
-                fnc_rawdata_tt = np.flip(fnc_rawdata_tt, axis = 0)  # Flip axes to match MATLAB orientation
-                fnc_rawdata_tt = np.flip(fnc_rawdata_tt, axis = 1)  # Flip axes to match MATLAB orientation
-                print('fnc_rawdata_t shape (after func transform, should match original):', fnc_rawdata_t.get_fdata().shape)
                 print('fnc_rawdata_tt shape (after atlas transform, shape changed):', fnc_rawdata_tt.shape)
                 print('atlas (target) shape:', atlas_data.shape)
                 print('Expected vs actual shape match:', expected_output_shape == fnc_rawdata_tt.shape)
@@ -596,7 +590,7 @@ class ProcessWindow(QWidget):
                 print(f"   {atlas_data.shape[0]}   {atlas_data.shape[1]}   {atlas_data.shape[2]}")
                 print()
                 print("fnc_rawdata_t (after func transform, unchanged):")
-                print(f"   {fnc_rawdata_t.get_fdata().shape[0]}   {fnc_rawdata_t.get_fdata().shape[1]}   {fnc_rawdata_t.get_fdata().shape[2]}")
+                print(f"   {fnc_rawdata_t.shape[0]}   {fnc_rawdata_t.shape[1]}   {fnc_rawdata_t.shape[2]}")
                 print()
                 print("fnc_rawdata_tt (after atlas transform, shape changed):")
                 print("Before shift/trim:")
@@ -645,67 +639,108 @@ class ProcessWindow(QWidget):
                 print(f"dys: {indices.get('dxys', 'N/A')} to {indices.get('dxye', 'N/A')}")
                 print(f"dzs: {indices.get('dxzs', 'N/A')} to {indices.get('dxze', 'N/A')}")
                 
-                # Apply two-step transformation to all timepoints to match MATLAB behavior
-                # Step 1: Apply functional transform (no shape change, like MATLAB)
-                # Step 2: Apply atlas transform (shape changes to match expected_output_shape)
+                # Import our MATLAB-compatible imwarp implementation
+                import sys
+                sys.path.append('/Users/cnn1/Desktop/GAT_FD')
+                from matlab_imwarp import matlab_imwarp_3d, ImRef3D
+                
+                print("=== Using MATLAB-compatible imwarp implementation ===")
+                
+                # Convert NIfTI affine matrices to MATLAB-style transformation matrices
+                # Extract transformation from NIfTI header (if available)
+                func_transform = func_img.affine if hasattr(func_img, 'affine') else np.eye(4)
+                atlas_transform = atlas_nib.affine if hasattr(atlas_nib, 'affine') else np.eye(4)
+                
+                print(f"Functional transform matrix:\n{func_transform}")
+                print(f"Atlas transform matrix:\n{atlas_transform}")
+                
+                # Calculate inverse transformation for atlas-to-functional mapping
+                atlas_to_func_transform = np.linalg.inv(atlas_transform) @ func_transform
+                
+                print(f"Atlas-to-functional transform:\n{atlas_to_func_transform}")
+                
+                # Create output spatial referencing to match expected output shape
+                output_ref = ImRef3D(expected_output_shape)
+                
+                # Apply two-step transformation to all timepoints to match MATLAB's imwarp behavior
                 resampled_func = np.zeros(expected_output_shape + (func_data.shape[3],), dtype=func_data.dtype)
                 for t in range(func_data.shape[3]):
-                    # Step 1: Apply functional image's own transform (create NIfTI image like MATLAB)
-                    fnc_rawdata_t_vol = nib.Nifti1Image(func_data[..., t], func_affine)
+                    print(f"Processing timepoint {t+1}/{func_data.shape[3]} with MATLAB imwarp")
                     
-                    # Step 2: Apply atlas transformation (shape changes)
-                    resampled_img = resample_from_to(fnc_rawdata_t_vol, atlas_ref_img, order=1)
-                    resampled_func[..., t] = resampled_img.get_fdata()
-                print('Resampled func_data shape (after 2-step transform):', resampled_func.shape)
+                    # Step 1: Apply functional image's own transform (fnc_rawdata_t = imwarp(fnc_rawdata(:,:,:,t), transform))
+                    func_vol = func_data[..., t]
+                    func_transformed, _ = matlab_imwarp_3d(
+                        func_vol,
+                        func_transform,
+                        output_view=None,  # Use default (same size)
+                        method='linear'
+                    )
+                    
+                    # Step 2: Apply atlas transformation (fnc_rawdata_tt = imwarp(fnc_rawdata_t, atlas_inv_transform))
+                    func_final, _ = matlab_imwarp_3d(
+                        func_transformed,
+                        atlas_to_func_transform,
+                        output_view=output_ref,  # Use target output size
+                        method='linear'
+                    )
+                    
+                    resampled_func[..., t] = func_final
                 
-                # Also resample the atlas to the same grid
-                atlas_img_nib = nib.Nifti1Image(atlas_data, atlas_affine)
-                resampled_atlas_img = resample_from_to(atlas_img_nib, atlas_ref_img, order=0)  # nearest neighbor for labels
-                resampled_atlas = resampled_atlas_img.get_fdata().astype(np.int32)
-                print('Resampled atlas shape:', resampled_atlas.shape)
+                print('Resampled func_data shape (using MATLAB imwarp):', resampled_func.shape)
+                
+                # Also transform the atlas using the same approach
+                print("Transforming atlas with MATLAB imwarp...")
+                resampled_atlas, _ = matlab_imwarp_3d(
+                    atlas_data.astype(np.float32),
+                    atlas_to_func_transform,
+                    output_view=output_ref,
+                    method='nearest'  # Use nearest neighbor for label data
+                )
+                resampled_atlas = resampled_atlas.astype(np.int32)
+                print('Resampled atlas shape (using MATLAB imwarp):', resampled_atlas.shape)
                 
                 # --- SAVE INTERMEDIATE DATA 1: After resampling, before cropping ---
                 # Use same center region for consistency
                 # Use np.round to match MATLAB's round() function
-                center_x_r = int(np.ceil(fnc_rawdata_tt.shape[0]/2))
-                center_y_r = int(np.ceil(fnc_rawdata_tt.shape[1]/2))
-                center_z_r = int(np.ceil(fnc_rawdata_tt.shape[2]/2))
-                x_start_r, x_end_r = max(0, center_x_r-10), min(fnc_rawdata_tt.shape[0], center_x_r+10)
-                y_start_r, y_end_r = max(0, center_y_r-10), min(fnc_rawdata_tt.shape[1], center_y_r+10)
-                z_start_r, z_end_r = max(0, center_z_r-5), min(fnc_rawdata_tt.shape[2], center_z_r+5)
+                center_x_r = int(np.ceil(resampled_func.shape[0]/2))
+                center_y_r = int(np.ceil(resampled_func.shape[1]/2))
+                center_z_r = int(np.ceil(resampled_func.shape[2]/2))
+                x_start_r, x_end_r = max(0, center_x_r-10), min(resampled_func.shape[0], center_x_r+10)
+                y_start_r, y_end_r = max(0, center_y_r-10), min(resampled_func.shape[1], center_y_r+10)
+                z_start_r, z_end_r = max(0, center_z_r-5), min(resampled_func.shape[2], center_z_r+5)
                 print(f"Sample region (Python 0-based): [{x_start_r}:{x_end_r}, {y_start_r}:{y_end_r}, {z_start_r}:{z_end_r}]")
                 print(f"Sample region (MATLAB equivalent 1-based): [{x_start_r+1}:{x_end_r}, {y_start_r+1}:{y_end_r}, {z_start_r+1}:{z_end_r}]")
                 intermediate_data['step1_after_resample'] = {
                     'resampled_func_shape': resampled_func.shape,  # 4D - all timepoints (final data after 2-step transform)
                     'resampled_func_first_shape': resampled_func[..., 0].shape,  # 3D - first timepoint 
-                    'fnc_rawdata_t_shape': fnc_rawdata_t.get_fdata().shape,  # 3D - after step 1 (unchanged like MATLAB)
+                    'fnc_rawdata_t_shape': fnc_rawdata_t.shape,  # 3D - after step 1 (unchanged like MATLAB)
                     'fnc_rawdata_tt_shape': fnc_rawdata_tt.shape,  # 3D - after step 2 (shape changed like MATLAB)
                     'resampled_atlas_shape': resampled_atlas.shape,
                     'resampled_func_sample': resampled_func[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r, 0:min(3, resampled_func.shape[3])].astype(np.float32),
-                    'fnc_rawdata_t_sample': fnc_rawdata_t.get_fdata()[x_start_orig:x_end_orig, y_start_orig:y_end_orig, z_start_orig:z_end_orig].astype(np.float32),  # 3D - use same indices as step0
-                    'fnc_rawdata_tt_sample': fnc_rawdata_tt[:, :, 100].astype(np.float32),  # Step 2 (changed)
+                    'fnc_rawdata_t_sample': fnc_rawdata_t[x_start_orig:x_end_orig, y_start_orig:y_end_orig, z_start_orig:z_end_orig].astype(np.float32),  # 3D - use same indices as step0
+                    'fnc_rawdata_tt_sample': fnc_rawdata_tt[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r,].astype(np.float32),
                     'resampled_atlas_sample': resampled_atlas[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r].astype(np.float32),
                     'resampled_func_dtype': str(resampled_func.dtype),
                     'resampled_atlas_dtype': str(resampled_atlas.dtype),
-                    'fnc_rawdata_t_dtype': str(fnc_rawdata_t.get_fdata().dtype),
+                    'fnc_rawdata_t_dtype': str(fnc_rawdata_t.dtype),
                     'fnc_rawdata_tt_dtype': str(fnc_rawdata_tt.dtype),
                     'sample_region': f'[{x_start_r}:{x_end_r}, {y_start_r}:{y_end_r}, {z_start_r}:{z_end_r}]'
                 }
                 print("--- INTERMEDIATE DATA STEP 1: After resampling, before cropping ---")
-                print(f"fnc_rawdata_t shape (3D - after step 1, unchanged like MATLAB): {fnc_rawdata_t.get_fdata().shape}")
+                print(f"fnc_rawdata_t shape (3D - after step 1, unchanged like MATLAB): {fnc_rawdata_t.shape}")
                 print(f"fnc_rawdata_tt shape (3D - after step 2, shape changed like MATLAB): {fnc_rawdata_tt.shape}")
                 print(f"resampled_func shape (4D - all timepoints after 2-step transform): {resampled_func.shape}")
                 print(f"resampled_atlas shape: {resampled_atlas.shape}")
                 print(f"Sample region (center brain): [{x_start_r}:{x_end_r}, {y_start_r}:{y_end_r}, {z_start_r}:{z_end_r}]")
                 
                 # Verify the two-step process matches MATLAB behavior
-                print(f"Step 1 verification - fnc_rawdata_t unchanged: {fnc_rawdata_t.get_fdata().shape == func_data[..., 0].shape}")
+                print(f"Step 1 verification - fnc_rawdata_t unchanged: {fnc_rawdata_t.shape == func_data[..., 0].shape}")
                 print(f"Step 2 verification - fnc_rawdata_tt shape changed: {fnc_rawdata_tt.shape == expected_output_shape}")
                 print(f"Final verification - resampled_func matches fnc_rawdata_tt: {np.allclose(fnc_rawdata_tt, resampled_func[..., 0])}")
                 # Check sample regions for debugging
                 resampled_func_sample_region = resampled_func[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r, 0]
                 print(f"resampled_func sample (first timepoint) min/max: {np.min(resampled_func_sample_region):.6f} / {np.max(resampled_func_sample_region):.6f}")
-                fnc_rawdata_t_sample_region = fnc_rawdata_t.get_fdata()[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r]
+                fnc_rawdata_t_sample_region = fnc_rawdata_t[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r]
                 print(f"fnc_rawdata_t sample (unchanged) min/max: {np.min(fnc_rawdata_t_sample_region):.6f} / {np.max(fnc_rawdata_t_sample_region):.6f}")
                 fnc_rawdata_tt_sample_region = fnc_rawdata_tt[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r]
                 print(f"fnc_rawdata_tt sample (shape changed) min/max: {np.min(fnc_rawdata_tt_sample_region):.6f} / {np.max(fnc_rawdata_tt_sample_region):.6f}")
