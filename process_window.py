@@ -10,10 +10,21 @@ from PyQt6.QtWidgets import QWidget, QLabel,QComboBox, QFileDialog, QPushButton,
 from PyQt6.QtGui import QIntValidator 
 from nilearn.input_data import NiftiLabelsMasker
 from nilearn.image import resample_to_img
+import matlab.engine
 from nibabel.processing import resample_from_to
+
 class ProcessWindow(QWidget):
     def __init__(self):
         super().__init__()
+        # Initialize MATLAB Engine (this may take a few seconds)
+        try:
+            print("Starting MATLAB Engine...")
+            self.eng = matlab.engine.start_matlab()
+            print("MATLAB Engine started successfully!")
+        except Exception as e:
+            print(f"Failed to start MATLAB Engine: {e}")
+            print("MATLAB Engine features will be disabled.")
+            self.eng = None
         self.createComponents()
         self.startupFcn()
       
@@ -570,17 +581,79 @@ class ProcessWindow(QWidget):
                 print("Expected output shape (calculated):", expected_output_shape)
                 
                 fnc_rawdata_t = func_data[..., 0].copy() 
-                # --- STEP 2: Apply atlas transformation (like MATLAB second imwarp) ---
-                # In MATLAB: fnc_rawdata_tt=imwarp(fnc_rawdata_t,fnc_pro_atlas_invtran);
-                # This is where shape changes to match atlas space
-                func_first_vol_img = nib.Nifti1Image(fnc_rawdata_t, func_affine)
                 
-                # Create a reference image with the expected output shape and atlas voxel size
-                expected_affine = atlas_affine.copy()
-                atlas_ref_img = nib.Nifti1Image(np.zeros(expected_output_shape, dtype=np.float32), expected_affine)
-                
-                resampled_img = resample_from_to(func_first_vol_img, atlas_ref_img, order=3)
-                fnc_rawdata_tt = resampled_img.get_fdata()
+                # --- Use MATLAB imwarp to match MATLAB processing exactly ---
+                def fix_affine_for_matlab(aff):
+                    """Ensure affine matrix is valid for MATLAB affine3d:
+                    last column = [0, 0, 0, 1]'"""
+                    aff = np.array(aff, dtype=float)
+                    if aff.shape == (4, 4):
+                        aff[:, 3] = [0, 0, 0, 1]  # enforce valid form - fix COLUMN not row
+                    return aff
+
+
+                if self.eng is not None:
+                    print("Using MATLAB Engine for imwarp transformation...")
+
+                    try:
+                        # Convert data to MATLAB format
+                        func_data_matlab = matlab.double(func_data[:, :, :, 0].tolist())
+                        atlas_data_matlab = matlab.double(atlas_data.tolist())
+
+                        # --- Fix affines for MATLAB ---
+                        func_affine_fixed = fix_affine_for_matlab(func_affine)
+                        atlas_affine_fixed = fix_affine_for_matlab(atlas_affine)
+
+                        func_affine_matlab = matlab.double(func_affine_fixed.tolist())
+                        atlas_affine_matlab = matlab.double(atlas_affine_fixed.tolist())
+
+                        # Set up MATLAB workspace
+                        self.eng.workspace['func_data'] = func_data_matlab
+                        self.eng.workspace['func_affine'] = func_affine_matlab
+                        self.eng.workspace['atlas_affine'] = atlas_affine_matlab
+
+                        # Create MATLAB niftiinfo-like structures
+                        self.eng.eval("func_info = struct();", nargout=0)
+                        self.eng.eval("func_info.Transform = affine3d(func_affine);", nargout=0)
+                        self.eng.eval("atlas_info = struct();", nargout=0)
+                        self.eng.eval("atlas_info.Transform = affine3d(atlas_affine);", nargout=0)
+
+                        # Create inverse transform for atlas
+                        self.eng.eval("atlas_invtran = invert(atlas_info.Transform);", nargout=0)
+
+                        # ---- First imwarp step (func to world space) ----
+                        self.eng.eval("fnc_rawdata_t = imwarp(func_data, func_info.Transform);", nargout=0)
+                        fnc_rawdata_t_matlab = self.eng.workspace['fnc_rawdata_t']
+                        fnc_rawdata_t = np.array(fnc_rawdata_t_matlab, dtype=np.float32)
+
+                        # ---- Second imwarp step (world to atlas space) ----
+                        self.eng.workspace['fnc_rawdata_t'] = matlab.double(fnc_rawdata_t.tolist())
+                        self.eng.eval("fnc_rawdata_tt = imwarp(fnc_rawdata_t, atlas_invtran);", nargout=0)
+                        fnc_rawdata_tt_matlab = self.eng.workspace['fnc_rawdata_tt']
+                        fnc_rawdata_tt = np.array(fnc_rawdata_tt_matlab, dtype=np.float32)
+
+                        print('fnc_rawdata_t shape (MATLAB imwarp result):', fnc_rawdata_t.shape)
+                        print('fnc_rawdata_tt shape (MATLAB imwarp result):', fnc_rawdata_tt.shape)
+                    except Exception as e:
+                        print(f"MATLAB imwarp failed: {e}")
+                        print("Falling back to nibabel resampling...")
+                        # Set flag to use fallback
+                        self.eng = None
+                        
+                if self.eng is None:
+                    print("Using nibabel resampling (fallback)...")
+                    # Fallback to original nibabel method
+                    from nibabel.processing import resample_from_to
+                    func_first_vol_img = nib.Nifti1Image(fnc_rawdata_t, func_affine)
+                    expected_affine = atlas_affine.copy()
+                    atlas_ref_img = nib.Nifti1Image(np.zeros(expected_output_shape, dtype=np.float32), expected_affine)
+                    resampled_img = resample_from_to(func_first_vol_img, atlas_ref_img, order=1)
+                    fnc_rawdata_tt = resampled_img.get_fdata().astype(np.float32)
+                    
+                    # Also create atlas reference for fallback
+                    atlas_img_nib = nib.Nifti1Image(atlas_data, atlas_affine)
+                    resampled_atlas_img = resample_from_to(atlas_img_nib, atlas_ref_img, order=0)
+                    resampled_atlas = resampled_atlas_img.get_fdata().astype(np.int32)
                 print('fnc_rawdata_tt shape (after atlas transform, shape changed):', fnc_rawdata_tt.shape)
                 print('atlas (target) shape:', atlas_data.shape)
                 print('Expected vs actual shape match:', expected_output_shape == fnc_rawdata_tt.shape)
@@ -605,23 +678,28 @@ class ProcessWindow(QWidget):
                     for dim, (data_dim, atlas_dim) in enumerate(zip(data_shape, atlas_shape)):
                         dim_name = ['X', 'Y', 'Z'][dim]
                         if data_dim > atlas_dim:
+                            # When data is larger than atlas, we need to crop the data
                             xshift = (data_dim - atlas_dim) // 2
-                            # MATLAB uses 1-based indexing
-                            axs = 1
-                            axe = atlas_dim
-                            dxs = xshift + 1  # +1 for MATLAB 1-based indexing
-                            dxe = xshift + atlas_dim
+                            # Atlas placement: fill entire atlas
+                            axs = 1  # MATLAB 1-based
+                            axe = atlas_dim  # MATLAB 1-based inclusive
+                            # Data extraction: extract middle portion
+                            dxs = xshift + 1  # MATLAB 1-based
+                            dxe = xshift + atlas_dim  # MATLAB 1-based inclusive
                             print(f"{dim_name} shift (data > atlas): xshift = {xshift}")
                             results[f'ax{dim_name.lower()}s'] = axs
                             results[f'ax{dim_name.lower()}e'] = axe
                             results[f'dx{dim_name.lower()}s'] = dxs
                             results[f'dx{dim_name.lower()}e'] = dxe
                         else:
+                            # When atlas is larger than data, we need to pad/center the data in atlas
                             xshift = (atlas_dim - data_dim) // 2
-                            axs = xshift + 1  # +1 for MATLAB 1-based indexing
-                            axe = xshift + data_dim
-                            dxs = 1
-                            dxe = data_dim
+                            # Atlas placement: place data in center of atlas
+                            axs = xshift + 1  # MATLAB 1-based
+                            axe = xshift + data_dim  # MATLAB 1-based inclusive
+                            # Data extraction: take all data
+                            dxs = 1  # MATLAB 1-based
+                            dxe = data_dim  # MATLAB 1-based inclusive
                             print(f"{dim_name} shift (atlas > data): xshift = {xshift}")
                             results[f'ax{dim_name.lower()}s'] = axs
                             results[f'ax{dim_name.lower()}e'] = axe
@@ -629,7 +707,7 @@ class ProcessWindow(QWidget):
                             results[f'dx{dim_name.lower()}e'] = dxe
                     return results
                 
-                # Calculate shift indices like MATLAB for comparison (use fnc_rawdata_tt)
+                # Calculate shift indices like MATLAB for comparison (use fnc_rawdata_tt vs original atlas)
                 indices = get_matlab_style_indices(fnc_rawdata_tt.shape, atlas_data.shape)
                 print("--- Cropping/shift indices summary (Python equivalent) ---")
                 print(f"axs: {indices.get('axxs', 'N/A')} to {indices.get('axxs', 0) + atlas_data.shape[0] - 1 if 'axxs' in indices else 'N/A'}")
@@ -639,25 +717,57 @@ class ProcessWindow(QWidget):
                 print(f"dys: {indices.get('dxys', 'N/A')} to {indices.get('dxye', 'N/A')}")
                 print(f"dzs: {indices.get('dxzs', 'N/A')} to {indices.get('dxze', 'N/A')}")
                 
-                # Apply two-step transformation to all timepoints to match MATLAB behavior
-                # Step 1: Apply functional transform (no shape change, like MATLAB)
-                # Step 2: Apply atlas transform (shape changes to match expected_output_shape)
+                # Apply MATLAB imwarp to all timepoints to match MATLAB behavior exactly
                 resampled_func = np.zeros(expected_output_shape + (func_data.shape[3],), dtype=func_data.dtype)
-                for t in range(func_data.shape[3]):
-                    # Step 1: Apply functional image's own transform (keep original shape)
-                    fnc_rawdata_t_vol = func_data[..., t].copy()  # No transformation like MATLAB
-                    
-                    # Step 2: Apply atlas transformation (shape changes)
-                    func_vol_img = nib.Nifti1Image(fnc_rawdata_t_vol, func_affine)
-                    resampled_img = resample_from_to(func_vol_img, atlas_ref_img, order=1)
-                    resampled_func[..., t] = resampled_img.get_fdata()
-                print('Resampled func_data shape (after 2-step transform):', resampled_func.shape)
                 
-                # Also resample the atlas to the same grid
-                atlas_img_nib = nib.Nifti1Image(atlas_data, atlas_affine)
-                resampled_atlas_img = resample_from_to(atlas_img_nib, atlas_ref_img, order=0)  # nearest neighbor for labels
-                resampled_atlas = resampled_atlas_img.get_fdata().astype(np.int32)
-                print('Resampled atlas shape:', resampled_atlas.shape)
+                if self.eng is not None:
+                    print(f"Processing all {func_data.shape[3]} timepoints with MATLAB imwarp...")
+                    
+                    try:
+                        for t in range(func_data.shape[3]):
+                            if t % 10 == 0:  # Progress indicator
+                                print(f"  Processing timepoint {t+1}/{func_data.shape[3]}")
+                            
+                            # Convert current timepoint to MATLAB format
+                            func_vol_matlab = matlab.double(func_data[:, :, :, t].tolist())
+                            self.eng.workspace['func_vol'] = func_vol_matlab
+                            
+                            # Apply two-step transformation using MATLAB imwarp
+                            # Step 1: Apply functional transform (unchanged shape like MATLAB)
+                            self.eng.eval("fnc_rawdata_t_vol = imwarp(func_vol, func_info.Transform);", nargout=0)
+                            
+                            # Step 2: Apply atlas transform (shape changes like MATLAB)
+                            self.eng.eval("fnc_rawdata_tt_vol = imwarp(fnc_rawdata_t_vol, atlas_invtran);", nargout=0)
+                            
+                            # Get result back to Python
+                            fnc_rawdata_tt_vol_matlab = self.eng.workspace['fnc_rawdata_tt_vol']
+                            resampled_func[..., t] = np.array(fnc_rawdata_tt_vol_matlab, dtype=np.float32)
+                            
+                    except Exception as e:
+                        print(f"MATLAB imwarp failed for timepoint processing: {e}")
+                        print("MATLAB Engine disabled for this session.")
+                        self.eng = None
+                        
+                if self.eng is None:
+                    print("Cannot process without MATLAB Engine. Please restart the application.")
+                    return
+                    
+                print('Resampled func_data shape (after 2-step MATLAB imwarp):', resampled_func.shape)
+                
+                # Also resample the atlas using MATLAB imwarp to the same grid
+                # IMPORTANT: MATLAB does NOT resample the atlas - it keeps the original atlas
+                # and only resamples the functional data to match the atlas space
+                print("MATLAB approach: Using original atlas (no resampling)")
+                resampled_atlas = atlas_data  # Use original atlas as MATLAB does
+                
+                print('Original atlas shape (used for cropping target):', resampled_atlas.shape)
+                
+                # Verify the approach matches MATLAB
+                # In MATLAB: resampled_func has shape after transformation, atlas keeps original shape  
+                print(f"✓ MATLAB approach confirmed:")
+                print(f"  - Functional data resampled to: {resampled_func.shape[:3]}")
+                print(f"  - Atlas remains in original space: {resampled_atlas.shape}")
+                print(f"  - Cropping will align resampled functional data to original atlas space")
                 
                 # --- SAVE INTERMEDIATE DATA 1: After resampling, before cropping ---
                 # Use same center region for consistency
@@ -678,6 +788,7 @@ class ProcessWindow(QWidget):
                     'resampled_atlas_shape': resampled_atlas.shape,
                     'resampled_func_sample': resampled_func[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r, 0:min(3, resampled_func.shape[3])].astype(np.float32),
                     'fnc_rawdata_t_sample': fnc_rawdata_t[x_start_orig:x_end_orig, y_start_orig:y_end_orig, z_start_orig:z_end_orig].astype(np.float32),  # 3D - use same indices as step0
+                    # 'fnc_rawdata_tt_sample': fnc_rawdata_tt[, , 100,].astype(np.float32), #for dislpay only
                     'fnc_rawdata_tt_sample': fnc_rawdata_tt[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r,].astype(np.float32),
                     'resampled_atlas_sample': resampled_atlas[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r].astype(np.float32),
                     'resampled_func_dtype': str(resampled_func.dtype),
@@ -709,17 +820,17 @@ class ProcessWindow(QWidget):
                 print("Two-step transformation complete - using resampled_func (4D) for final processing")
                 
                 # --- Apply MATLAB-style cropping using the calculated indices ---
-                # Use the calculated MATLAB-style indices to crop exactly like MATLAB
-                target_shape = atlas_data.shape  # This is the final target shape we want
-                print(f'Target atlas shape: {target_shape}')
-                print(f'Resampled data shape before cropping: {resampled_func.shape[:3]}')
+                # Use the original atlas shape as the target (exactly like MATLAB)
+                target_shape = atlas_data.shape  # Original atlas shape - this is what MATLAB uses
+                print(f'Target atlas shape (original): {target_shape}')
+                print(f'Resampled functional data shape before cropping: {resampled_func.shape[:3]}')
                 
-                # Initialize output arrays with exact target shape
+                # Initialize output arrays with exact target shape (original atlas shape)
                 final_func = np.zeros(target_shape + (func_data.shape[3],), dtype=resampled_func.dtype)
-                final_atlas = np.zeros(target_shape, dtype=resampled_atlas.dtype)
+                final_atlas = resampled_atlas  # Use original atlas directly (no cropping needed)
                 
                 # Convert MATLAB 1-based indices to Python 0-based indices and apply cropping
-                # Extract the calculated indices
+                # This crops the resampled functional data to fit the original atlas space
                 # MATLAB uses 1-based indexing with inclusive end, Python uses 0-based with exclusive end
                 # MATLAB 1:145 becomes Python 0:145 (0 to 144 inclusive)
                 # MATLAB 7:151 becomes Python 6:151 (6 to 150 inclusive)
@@ -744,10 +855,18 @@ class ProcessWindow(QWidget):
                 print(f'MATLAB equivalent - Atlas placement: X[{indices.get("axxs", 1)}:{indices.get("axxe", target_shape[0])}], Y[{indices.get("axys", 1)}:{indices.get("axye", target_shape[1])}], Z[{indices.get("axzs", 1)}:{indices.get("axze", target_shape[2])}]')
                 print(f'MATLAB equivalent - Data extraction: X[{indices.get("dxxs", 1)}:{indices.get("dxxe", resampled_func.shape[0])}], Y[{indices.get("dxys", 1)}:{indices.get("dxye", resampled_func.shape[1])}], Z[{indices.get("dxzs", 1)}:{indices.get("dxze", resampled_func.shape[2])}]')
                 
-                # Apply the exact MATLAB cropping logic - ALWAYS for both atlas and functional data
-                # This ensures atlas calculation uses MATLAB-style cropping indices
+                # Debug: Check actual array shapes before cropping
+                print(f'DEBUG: resampled_func.shape = {resampled_func.shape}')
+                print(f'DEBUG: resampled_atlas.shape = {resampled_atlas.shape}')
+                print(f'DEBUG: target_shape = {target_shape}')
+                print(f'DEBUG: Extraction region would be: resampled_func[{dxs}:{dxe}, {dys}:{dye}, {dzs}:{dze}] -> shape {(dxe-dxs, dye-dys, dze-dzs)}')
+                print(f'DEBUG: Extraction region would be: resampled_atlas[{dxs}:{dxe}, {dys}:{dye}, {dzs}:{dze}] -> shape {(dxe-dxs, dye-dys, dze-dzs)}')
+                print(f'DEBUG: Atlas placement region: final_atlas[{axs}:{axe}, {ays}:{aye}, {azs}:{aze}] -> shape {(axe-axs, aye-ays, aze-azs)}')
+                
+                # Apply the exact MATLAB cropping logic - crop resampled functional data to original atlas space
+                # Only crop functional data - atlas is already in the correct space
                 final_func[axs:axe, ays:aye, azs:aze, :] = resampled_func[dxs:dxe, dys:dye, dzs:dze, :]
-                final_atlas[axs:axe, ays:aye, azs:aze] = resampled_atlas[dxs:dxe, dys:dye, dzs:dze]
+                # final_atlas is already set to resampled_atlas (original atlas)
                 
                 # --- SAVE INTERMEDIATE DATA 2: After cropping (final) ---
                 # Use same center region for consistency

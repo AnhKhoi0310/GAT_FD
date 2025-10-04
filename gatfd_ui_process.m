@@ -432,9 +432,7 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                         atl_len=94;
                 end                
                 fnc_pro_atlas_size=size(fnc_pro_atlas_masks);
-                disp("fnc_pro_atlas_info:"); disp(fnc_pro_atlas_info.Transform);
                 fnc_pro_atlas_invtran=invert(fnc_pro_atlas_info.Transform);
-                disp("fnc_pro_atlas_innvtran: "); disp(fnc_pro_atlas_invtran);
                 fnc_window_size=app.gatp_setting.window_size;
             elseif app.FileFormatDropDown.Value==2
                 atl_len=length(app.gatp_setting.atlas_list);
@@ -659,7 +657,7 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                         
                         % Store small samples to avoid memory issues
                         intermediate_data.step2_after_imwarp.fnc_rawdata_t_sample = single(fnc_rawdata_t(x_start_t:x_end_t, y_start_t:y_end_t, z_start_t:z_end_t));
-                        intermediate_data.step2_after_imwarp.fnc_rawdata_tt_sample = single(fnc_rawdata_tt(:, :, 101));
+                        intermediate_data.step2_after_imwarp.fnc_rawdata_tt_sample = single(fnc_rawdata_tt(x_start_tt:x_end_tt, y_start_tt:y_end_tt, z_start_tt:z_end_tt));
                         intermediate_data.step2_after_imwarp.fnc_rawdata_t_dtype = class(fnc_rawdata_t);
                         intermediate_data.step2_after_imwarp.fnc_rawdata_tt_dtype = class(fnc_rawdata_tt);
                         intermediate_data.step2_after_imwarp.sample_region_t = ['[', num2str(x_start_t), ':', num2str(x_end_t), ', ', num2str(y_start_t), ':', num2str(y_end_t), ', ', num2str(z_start_t), ':', num2str(z_end_t), ']'];
