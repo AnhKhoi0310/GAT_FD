@@ -11,6 +11,7 @@ from PyQt6.QtGui import QIntValidator
 from nilearn.input_data import NiftiLabelsMasker
 from nilearn.image import resample_to_img
 import matlab.engine
+import matlab
 from nibabel.processing import resample_from_to
 
 class ProcessWindow(QWidget):
@@ -407,18 +408,44 @@ class ProcessWindow(QWidget):
         if filter_type == 0:
             filter_setting1 = filter_setting2 = 0
         elif filter_type == 1:
-            filter_setting1 = float(self.settings['filter_setting1'])
-            filter_setting2 = float(self.settings['filter_setting2'])
-            # Validate bandpass: lower < upper
-            if filter_setting1 >= filter_setting2:
-                QMessageBox.critical(self, "Error", "Please enter correct band pass parameters")
+            try:
+                filter_setting1 = float(self.settings['filter_setting1'])
+                filter_setting2 = float(self.settings['filter_setting2'])
+                # Validate bandpass: lower < upper
+                if filter_setting1 >= filter_setting2:
+                    QMessageBox.critical(self, "Error", "Please enter correct band pass parameters")
+                    return
+            except (ValueError, TypeError):
+                QMessageBox.critical(self, "Error", "Invalid bandpass filter parameters. Please enter valid numbers.")
                 return
         elif filter_type in (2, 3):
-            filter_setting1 = float(self.settings['filter_setting1'])
-            filter_setting2 = 0
+            try:
+                filter_setting1 = float(self.settings['filter_setting1'])
+                filter_setting2 = 0
+            except (ValueError, TypeError):
+                QMessageBox.critical(self, "Error", "Invalid filter parameter. Please enter a valid number.")
+                return
         elif filter_type == 4:
-            filter_setting1 = int(self.settings['filter_setting1'])
-            filter_setting2 = int(self.settings['filter_setting2'])
+            try:
+                # For wavelet filter, handle the settings more carefully
+                setting1_str = str(self.settings['filter_setting1']).strip()
+                setting2_str = str(self.settings['filter_setting2']).strip()
+                
+                # Try to convert to integers, handling potential multi-value strings
+                if ' ' in setting1_str:
+                    # If there are spaces, take the first value
+                    filter_setting1 = int(setting1_str.split()[0])
+                else:
+                    filter_setting1 = int(setting1_str)
+                    
+                if ' ' in setting2_str:
+                    # If there are spaces, take the first value
+                    filter_setting2 = int(setting2_str.split()[0])
+                else:
+                    filter_setting2 = int(setting2_str)
+            except (ValueError, TypeError):
+                QMessageBox.critical(self, "Error", "Invalid wavelet filter parameters. Please enter valid integers.")
+                return
         else:
             # Unexpected filter type
             print("filter type error")
@@ -490,95 +517,13 @@ class ProcessWindow(QWidget):
                 atlas_data = atlas_data.astype(np.float32)  # MATLAB uses 'single' (float32)
                 func_data = func_data.astype(np.float32)    # MATLAB uses 'single' (float32)
                 
-                # --- DEBUG: Print original functional data before resampling ---
-                print('=== ORIGINAL FUNCTIONAL DATA BEFORE RESAMPLING ===')
-                print(f'Original func shape: {func_data.shape}')
-                print(f'Original func data type: {func_data.dtype}')
-                print(f'Original func min: {np.min(func_data):.6f}, max: {np.max(func_data):.6f}')
-                # Print a small sample of the original functional data for comparison
-                # IMPORTANT: Use MATLAB-equivalent indexing (1:5 in MATLAB = 0:5 in Python, but we want same voxels)
-                # So MATLAB [1:5, 1:5, 1:5, 1:3] = Python [1:6, 1:6, 1:6, 1:4] to get same voxels
-                func_sample = func_data[1:6, 1:6, 1:6, 1:4]  # Match MATLAB indexing
-                print(f'Original func sample [1:6, 1:6, 1:4] (MATLAB equivalent [1:5, 1:5, 1:5, 1:3]):')
-                print(f'  Shape: {func_sample.shape}')
-                print(f'  Sample mean: {np.mean(func_sample):.6f}')
-                print(f'  Sample std: {np.std(func_sample):.6f}')
-                # Print first few voxel values from first timepoint
-                # MATLAB [1:10, 1:10, 1, 1] = Python [1:11, 1:11, 0, 0] to get same voxels
-                first_vol_sample = func_data[1:11, 1:11, 0, 0]  # Match MATLAB indexing
-                first_vol_flat = first_vol_sample.flatten()
-                print(f'First 10 voxels from first volume (MATLAB equivalent): {[f"{val:.6f}" for val in first_vol_flat[:10]]}')
-                print('=' * 50)
-                
-                # Print voxel size and orientation info for debug
-                print("Atlas affine:\n", atlas_nib.affine)
-                print("Atlas orientation:", nib.aff2axcodes(atlas_nib.affine))
-                print("Atlas array shape:", atlas_data.shape)
-                print("Func affine:\n", func_img.affine)
-                print("Func orientation:", nib.aff2axcodes(func_img.affine))
-                print("Func array shape:", func_data.shape)
-                
-                # --- SAVE INTERMEDIATE DATA 0: Original loaded data (no reorientation) ---
-                intermediate_data = {}
-                # Use center region to get meaningful brain data instead of background
-                # MATLAB: center_x_orig = round(size(fnc_rawdata,1)/2)
-                center_x_orig = int(np.ceil(func_data.shape[0]/2))
-                center_y_orig = int(np.ceil(func_data.shape[1]/2))
-                center_z_orig = int(np.ceil(func_data.shape[2]/2))
-                print(f"Center voxel (original data, MATLAB-style 1-based): ({center_x_orig}, {center_y_orig}, {center_z_orig})")   
-                # MATLAB uses [center-9:center+10] (1-based), we use [center-10:center+10] (0-based) for equivalent range
-                x_start_orig, x_end_orig = max(0, center_x_orig-10), min(func_data.shape[0], center_x_orig+10)
-                y_start_orig, y_end_orig = max(0, center_y_orig-10), min(func_data.shape[1], center_y_orig+10)
-                z_start_orig, z_end_orig = max(0, center_z_orig-5), min(func_data.shape[2], center_z_orig+5)
-                
-                intermediate_data['step0_original_data'] = {
-                    'func_shape': func_data.shape,
-                    'atlas_shape': atlas_data.shape,
-                    'func_sample': func_data[x_start_orig:x_end_orig, y_start_orig:y_end_orig, z_start_orig:z_end_orig, 0:min(3, func_data.shape[3])].astype(np.float32),
-                    'atlas_sample': atlas_data[x_start_orig:x_end_orig, y_start_orig:y_end_orig, z_start_orig:z_end_orig].astype(np.float32),
-                    'func_dtype': str(func_data.dtype),
-                    'atlas_dtype': str(atlas_data.dtype),
-                    'sample_region': f'[{x_start_orig}:{x_end_orig}, {y_start_orig}:{y_end_orig}, {z_start_orig}:{z_end_orig}]',
-                    'matlab_region': f'[{x_start_orig+1}:{x_end_orig}, {y_start_orig+1}:{y_end_orig}, {z_start_orig+1}:{z_end_orig}]',
-                    'func_orient': nib.aff2axcodes(func_img.affine),
-                    'atlas_orient': nib.aff2axcodes(atlas_nib.affine),
-                    'func_affine': func_img.affine.copy(),
-                    'atlas_affine': atlas_nib.affine.copy()
-                }
-                print("--- INTERMEDIATE DATA STEP 0: Original loaded data (no reorientation) ---")
-                print(f"Func shape: {func_data.shape}")
-                print(f"Atlas shape: {atlas_data.shape}")
-                print(f"Func orientation: {nib.aff2axcodes(func_img.affine)}")
-                print(f"Atlas orientation: {nib.aff2axcodes(atlas_nib.affine)}")
-                print(f"Sample region (Python 0-based): [{x_start_orig}:{x_end_orig}, {y_start_orig}:{y_end_orig}, {z_start_orig}:{z_end_orig}]")
-                print(f"Sample region (MATLAB equivalent 1-based): [{x_start_orig+1}:{x_end_orig}, {y_start_orig+1}:{y_end_orig}, {z_start_orig+1}:{z_end_orig}]")
-                func_sample_region_orig = func_data[x_start_orig:x_end_orig, y_start_orig:y_end_orig, z_start_orig:z_end_orig, 0]
-                print(f"Func sample min/max: {np.min(func_sample_region_orig):.6f} / {np.max(func_sample_region_orig):.6f}")
-                print(f"Func sample first element: {func_sample_region_orig[0,0,0]:.6f}")
-                atlas_sample_region_orig = atlas_data[x_start_orig:x_end_orig, y_start_orig:y_end_orig, z_start_orig:z_end_orig]
-                print(f"Atlas sample unique labels: {np.unique(atlas_sample_region_orig)}")
-                
-                # Use original loaded data directly (no reorientation)
-                func_shape = func_data.shape[:3]  # Define func_shape for output_shape
-                
-                # --- Manual calculation of output shape based on voxel sizes ---
-                # Use original affines (no reorientation)
                 atlas_affine = atlas_nib.affine
                 func_affine = func_img.affine
-                # --- Manual calculation of output shape based on voxel sizes ---
                 # Get voxel sizes
                 atlas_voxel_size = atlas_nib.header.get_zooms()[:3]
                 func_voxel_size = func_img.header.get_zooms()[:3]
-                print("Atlas voxel size:", atlas_voxel_size)
-                print("Func voxel size:", func_voxel_size)
-                
-                # Calculate physical dimensions of functional data
                 func_phys_dims = np.array(func_data.shape[:3]) * np.array(func_voxel_size)
-                print("Func physical dimensions (mm):", func_phys_dims)
-                
-                # Calculate expected output shape when resampling to atlas voxel size
                 expected_output_shape = tuple(int(np.ceil(dim / voxel)) for dim, voxel in zip(func_phys_dims, atlas_voxel_size))
-                print("Expected output shape (calculated):", expected_output_shape)
                 
                 fnc_rawdata_t = func_data[..., 0].copy() 
                 
@@ -632,8 +577,6 @@ class ProcessWindow(QWidget):
                         fnc_rawdata_tt_matlab = self.eng.workspace['fnc_rawdata_tt']
                         fnc_rawdata_tt = np.array(fnc_rawdata_tt_matlab, dtype=np.float32)
 
-                        print('fnc_rawdata_t shape (MATLAB imwarp result):', fnc_rawdata_t.shape)
-                        print('fnc_rawdata_tt shape (MATLAB imwarp result):', fnc_rawdata_tt.shape)
                     except Exception as e:
                         print(f"MATLAB imwarp failed: {e}")
                         print("Falling back to nibabel resampling...")
@@ -654,23 +597,6 @@ class ProcessWindow(QWidget):
                     atlas_img_nib = nib.Nifti1Image(atlas_data, atlas_affine)
                     resampled_atlas_img = resample_from_to(atlas_img_nib, atlas_ref_img, order=0)
                     resampled_atlas = resampled_atlas_img.get_fdata().astype(np.int32)
-                print('fnc_rawdata_tt shape (after atlas transform, shape changed):', fnc_rawdata_tt.shape)
-                print('atlas (target) shape:', atlas_data.shape)
-                print('Expected vs actual shape match:', expected_output_shape == fnc_rawdata_tt.shape)
-                
-                # Debug output to match MATLAB format
-                print("Atlas array shape:")
-                print(f"   {atlas_data.shape[0]}   {atlas_data.shape[1]}   {atlas_data.shape[2]}")
-                print()
-                print("fnc_rawdata_t (after func transform, unchanged):")
-                print(f"   {fnc_rawdata_t.shape[0]}   {fnc_rawdata_t.shape[1]}   {fnc_rawdata_t.shape[2]}")
-                print()
-                print("fnc_rawdata_tt (after atlas transform, shape changed):")
-                print("Before shift/trim:")
-                print(f"   {fnc_rawdata_tt.shape[0]}   {fnc_rawdata_tt.shape[1]}   {fnc_rawdata_tt.shape[2]}")
-                print()
-                print(f"   {atlas_data.shape[0]}   {atlas_data.shape[1]}   {atlas_data.shape[2]}")
-                print()
                 
                 # Calculate shift indices like MATLAB for comparison
                 def get_matlab_style_indices(data_shape, atlas_shape):
@@ -706,18 +632,8 @@ class ProcessWindow(QWidget):
                             results[f'dx{dim_name.lower()}s'] = dxs
                             results[f'dx{dim_name.lower()}e'] = dxe
                     return results
-                
-                # Calculate shift indices like MATLAB for comparison (use fnc_rawdata_tt vs original atlas)
                 indices = get_matlab_style_indices(fnc_rawdata_tt.shape, atlas_data.shape)
-                print("--- Cropping/shift indices summary (Python equivalent) ---")
-                print(f"axs: {indices.get('axxs', 'N/A')} to {indices.get('axxs', 0) + atlas_data.shape[0] - 1 if 'axxs' in indices else 'N/A'}")
-                print(f"ays: {indices.get('axys', 'N/A')} to {indices.get('axys', 0) + atlas_data.shape[1] - 1 if 'axys' in indices else 'N/A'}")
-                print(f"azs: {indices.get('axzs', 'N/A')} to {indices.get('axzs', 0) + atlas_data.shape[2] - 1 if 'axzs' in indices else 'N/A'}")
-                print(f"dxs: {indices.get('dxxs', 'N/A')} to {indices.get('dxxe', 'N/A')}")
-                print(f"dys: {indices.get('dxys', 'N/A')} to {indices.get('dxye', 'N/A')}")
-                print(f"dzs: {indices.get('dxzs', 'N/A')} to {indices.get('dxze', 'N/A')}")
                 
-                # Apply MATLAB imwarp to all timepoints to match MATLAB behavior exactly
                 resampled_func = np.zeros(expected_output_shape + (func_data.shape[3],), dtype=func_data.dtype)
                 
                 if self.eng is not None:
@@ -731,7 +647,6 @@ class ProcessWindow(QWidget):
                             # Convert current timepoint to MATLAB format
                             func_vol_matlab = matlab.double(func_data[:, :, :, t].tolist())
                             self.eng.workspace['func_vol'] = func_vol_matlab
-                            
                             # Apply two-step transformation using MATLAB imwarp
                             # Step 1: Apply functional transform (unchanged shape like MATLAB)
                             self.eng.eval("fnc_rawdata_t_vol = imwarp(func_vol, func_info.Transform);", nargout=0)
@@ -752,88 +667,16 @@ class ProcessWindow(QWidget):
                     print("Cannot process without MATLAB Engine. Please restart the application.")
                     return
                     
-                print('Resampled func_data shape (after 2-step MATLAB imwarp):', resampled_func.shape)
-                
-                # Also resample the atlas using MATLAB imwarp to the same grid
-                # IMPORTANT: MATLAB does NOT resample the atlas - it keeps the original atlas
-                # and only resamples the functional data to match the atlas space
-                print("MATLAB approach: Using original atlas (no resampling)")
                 resampled_atlas = atlas_data  # Use original atlas as MATLAB does
                 
-                print('Original atlas shape (used for cropping target):', resampled_atlas.shape)
-                
-                # Verify the approach matches MATLAB
-                # In MATLAB: resampled_func has shape after transformation, atlas keeps original shape  
                 print(f"✓ MATLAB approach confirmed:")
                 print(f"  - Functional data resampled to: {resampled_func.shape[:3]}")
                 print(f"  - Atlas remains in original space: {resampled_atlas.shape}")
-                print(f"  - Cropping will align resampled functional data to original atlas space")
-                
-                # --- SAVE INTERMEDIATE DATA 1: After resampling, before cropping ---
-                # Use same center region for consistency
-                # Use np.round to match MATLAB's round() function
-                center_x_r = int(np.ceil(resampled_func.shape[0]/2))
-                center_y_r = int(np.ceil(resampled_func.shape[1]/2))
-                center_z_r = int(np.ceil(resampled_func.shape[2]/2))
-                x_start_r, x_end_r = max(0, center_x_r-10), min(resampled_func.shape[0], center_x_r+10)
-                y_start_r, y_end_r = max(0, center_y_r-10), min(resampled_func.shape[1], center_y_r+10)
-                z_start_r, z_end_r = max(0, center_z_r-5), min(resampled_func.shape[2], center_z_r+5)
-                print(f"Sample region (Python 0-based): [{x_start_r}:{x_end_r}, {y_start_r}:{y_end_r}, {z_start_r}:{z_end_r}]")
-                print(f"Sample region (MATLAB equivalent 1-based): [{x_start_r+1}:{x_end_r}, {y_start_r+1}:{y_end_r}, {z_start_r+1}:{z_end_r}]")
-                intermediate_data['step1_after_resample'] = {
-                    'resampled_func_shape': resampled_func.shape,  # 4D - all timepoints (final data after 2-step transform)
-                    'resampled_func_first_shape': resampled_func[..., 0].shape,  # 3D - first timepoint 
-                    'fnc_rawdata_t_shape': fnc_rawdata_t.shape,  # 3D - after step 1 (unchanged like MATLAB)
-                    'fnc_rawdata_tt_shape': fnc_rawdata_tt.shape,  # 3D - after step 2 (shape changed like MATLAB)
-                    'resampled_atlas_shape': resampled_atlas.shape,
-                    'resampled_func_sample': resampled_func[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r, 0:min(3, resampled_func.shape[3])].astype(np.float32),
-                    'fnc_rawdata_t_sample': fnc_rawdata_t[x_start_orig:x_end_orig, y_start_orig:y_end_orig, z_start_orig:z_end_orig].astype(np.float32),  # 3D - use same indices as step0
-                    # 'fnc_rawdata_tt_sample': fnc_rawdata_tt[, , 100,].astype(np.float32), #for dislpay only
-                    'fnc_rawdata_tt_sample': fnc_rawdata_tt[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r,].astype(np.float32),
-                    'resampled_atlas_sample': resampled_atlas[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r].astype(np.float32),
-                    'resampled_func_dtype': str(resampled_func.dtype),
-                    'resampled_atlas_dtype': str(resampled_atlas.dtype),
-                    'fnc_rawdata_t_dtype': str(fnc_rawdata_t.dtype),
-                    'fnc_rawdata_tt_dtype': str(fnc_rawdata_tt.dtype),
-                    'sample_region': f'[{x_start_r}:{x_end_r}, {y_start_r}:{y_end_r}, {z_start_r}:{z_end_r}]'
-                }
-                print("--- INTERMEDIATE DATA STEP 1: After resampling, before cropping ---")
-                print(f"fnc_rawdata_t shape (3D - after step 1, unchanged like MATLAB): {fnc_rawdata_t.shape}")
-                print(f"fnc_rawdata_tt shape (3D - after step 2, shape changed like MATLAB): {fnc_rawdata_tt.shape}")
-                print(f"resampled_func shape (4D - all timepoints after 2-step transform): {resampled_func.shape}")
-                print(f"resampled_atlas shape: {resampled_atlas.shape}")
-                print(f"Sample region (center brain): [{x_start_r}:{x_end_r}, {y_start_r}:{y_end_r}, {z_start_r}:{z_end_r}]")
-                
-                # Verify the two-step process matches MATLAB behavior
-                print(f"Step 1 verification - fnc_rawdata_t unchanged: {fnc_rawdata_t.shape == func_data[..., 0].shape}")
-                print(f"Step 2 verification - fnc_rawdata_tt shape changed: {fnc_rawdata_tt.shape == expected_output_shape}")
-                print(f"Final verification - resampled_func matches fnc_rawdata_tt: {np.allclose(fnc_rawdata_tt, resampled_func[..., 0])}")
-                # Check sample regions for debugging
-                resampled_func_sample_region = resampled_func[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r, 0]
-                print(f"resampled_func sample (first timepoint) min/max: {np.min(resampled_func_sample_region):.6f} / {np.max(resampled_func_sample_region):.6f}")
-                fnc_rawdata_t_sample_region = fnc_rawdata_t[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r]
-                print(f"fnc_rawdata_t sample (unchanged) min/max: {np.min(fnc_rawdata_t_sample_region):.6f} / {np.max(fnc_rawdata_t_sample_region):.6f}")
-                fnc_rawdata_tt_sample_region = fnc_rawdata_tt[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r]
-                print(f"fnc_rawdata_tt sample (shape changed) min/max: {np.min(fnc_rawdata_tt_sample_region):.6f} / {np.max(fnc_rawdata_tt_sample_region):.6f}")
-                resampled_atlas_sample_region = resampled_atlas[x_start_r:x_end_r, y_start_r:y_end_r, z_start_r:z_end_r]
-                print(f"Resampled atlas sample unique labels: {np.unique(resampled_atlas_sample_region)}")
-                print("Two-step transformation complete - using resampled_func (4D) for final processing")
-                
-                # --- Apply MATLAB-style cropping using the calculated indices ---
                 # Use the original atlas shape as the target (exactly like MATLAB)
-                target_shape = atlas_data.shape  # Original atlas shape - this is what MATLAB uses
-                print(f'Target atlas shape (original): {target_shape}')
-                print(f'Resampled functional data shape before cropping: {resampled_func.shape[:3]}')
-                
+                target_shape = atlas_data.shape  
                 # Initialize output arrays with exact target shape (original atlas shape)
                 final_func = np.zeros(target_shape + (func_data.shape[3],), dtype=resampled_func.dtype)
                 final_atlas = resampled_atlas  # Use original atlas directly (no cropping needed)
-                
-                # Convert MATLAB 1-based indices to Python 0-based indices and apply cropping
-                # This crops the resampled functional data to fit the original atlas space
-                # MATLAB uses 1-based indexing with inclusive end, Python uses 0-based with exclusive end
-                # MATLAB 1:145 becomes Python 0:145 (0 to 144 inclusive)
-                # MATLAB 7:151 becomes Python 6:151 (6 to 150 inclusive)
                 
                 axs = indices.get('axxs', 1) - 1  # Convert start to 0-based
                 axe = indices.get('axxe', target_shape[0])  # End stays same (becomes exclusive in Python)
@@ -848,62 +691,7 @@ class ProcessWindow(QWidget):
                 dye = indices.get('dxye', resampled_func.shape[1])  # End stays same (becomes exclusive in Python)
                 dzs = indices.get('dxzs', 1) - 1  # Convert start to 0-based
                 dze = indices.get('dxze', resampled_func.shape[2])  # End stays same (becomes exclusive in Python)
-                
-                print(f'Using MATLAB-style cropping indices (converted to 0-based):')
-                print(f'Atlas placement: X[{axs}:{axe}], Y[{ays}:{aye}], Z[{azs}:{aze}]')
-                print(f'Data extraction: X[{dxs}:{dxe}], Y[{dys}:{dye}], Z[{dzs}:{dze}]')
-                print(f'MATLAB equivalent - Atlas placement: X[{indices.get("axxs", 1)}:{indices.get("axxe", target_shape[0])}], Y[{indices.get("axys", 1)}:{indices.get("axye", target_shape[1])}], Z[{indices.get("axzs", 1)}:{indices.get("axze", target_shape[2])}]')
-                print(f'MATLAB equivalent - Data extraction: X[{indices.get("dxxs", 1)}:{indices.get("dxxe", resampled_func.shape[0])}], Y[{indices.get("dxys", 1)}:{indices.get("dxye", resampled_func.shape[1])}], Z[{indices.get("dxzs", 1)}:{indices.get("dxze", resampled_func.shape[2])}]')
-                
-                # Debug: Check actual array shapes before cropping
-                print(f'DEBUG: resampled_func.shape = {resampled_func.shape}')
-                print(f'DEBUG: resampled_atlas.shape = {resampled_atlas.shape}')
-                print(f'DEBUG: target_shape = {target_shape}')
-                print(f'DEBUG: Extraction region would be: resampled_func[{dxs}:{dxe}, {dys}:{dye}, {dzs}:{dze}] -> shape {(dxe-dxs, dye-dys, dze-dzs)}')
-                print(f'DEBUG: Extraction region would be: resampled_atlas[{dxs}:{dxe}, {dys}:{dye}, {dzs}:{dze}] -> shape {(dxe-dxs, dye-dys, dze-dzs)}')
-                print(f'DEBUG: Atlas placement region: final_atlas[{axs}:{axe}, {ays}:{aye}, {azs}:{aze}] -> shape {(axe-axs, aye-ays, aze-azs)}')
-                
-                # Apply the exact MATLAB cropping logic - crop resampled functional data to original atlas space
-                # Only crop functional data - atlas is already in the correct space
                 final_func[axs:axe, ays:aye, azs:aze, :] = resampled_func[dxs:dxe, dys:dye, dzs:dze, :]
-                # final_atlas is already set to resampled_atlas (original atlas)
-                
-                # --- SAVE INTERMEDIATE DATA 2: After cropping (final) ---
-                # Use same center region for consistency
-                center_x_f = int(np.ceil(final_func.shape[0]/2))
-                center_y_f = int(np.ceil(final_func.shape[1]/2))
-                center_z_f = int(np.ceil(final_func.shape[2]/2))
-                x_start_f, x_end_f = max(0, center_x_f-10), min(final_func.shape[0], center_x_f+10)
-                y_start_f, y_end_f = max(0, center_y_f-10), min(final_func.shape[1], center_y_f+10)
-                z_start_f, z_end_f = max(0, center_z_f-5), min(final_func.shape[2], center_z_f+5)
-                
-                intermediate_data['step2_after_crop'] = {
-                    'func_shape': final_func.shape,
-                    'atlas_shape': final_atlas.shape,
-                    'func_sample': final_func[x_start_f:x_end_f, y_start_f:y_end_f, z_start_f:z_end_f, 0:min(3, final_func.shape[3])].astype(np.float32),
-                    'atlas_sample': final_atlas[x_start_f:x_end_f, y_start_f:y_end_f, z_start_f:z_end_f].astype(np.float32),
-                    'crop_indices': {
-                        'atlas_place': f'X[{axs}:{axe}], Y[{ays}:{aye}], Z[{azs}:{aze}]',
-                        'data_extract': f'X[{dxs}:{dxe}], Y[{dys}:{dye}], Z[{dzs}:{dze}]'
-                    },
-                    'sample_region': f'[{x_start_f}:{x_end_f}, {y_start_f}:{y_end_f}, {z_start_f}:{z_end_f}]'
-                }
-                print("--- INTERMEDIATE DATA STEP 2: After cropping (final) ---")
-                print(f"Final func shape: {final_func.shape}")
-                print(f"Final atlas shape: {final_atlas.shape}")
-                print(f"Sample region (center brain): [{x_start_f}:{x_end_f}, {y_start_f}:{y_end_f}, {z_start_f}:{z_end_f}]")
-                final_func_sample_region = final_func[x_start_f:x_end_f, y_start_f:y_end_f, z_start_f:z_end_f, 0]
-                print(f"Final func sample min/max: {np.min(final_func_sample_region):.6f} / {np.max(final_func_sample_region):.6f}")
-                final_atlas_sample_region = final_atlas[x_start_f:x_end_f, y_start_f:y_end_f, z_start_f:z_end_f]
-                print(f"Final atlas sample unique labels: {np.unique(final_atlas_sample_region)}")
-                
-                print(f'Final func shape: {final_func.shape}')
-                print(f'Final atlas shape: {final_atlas.shape}')
-                print(f'Target atlas shape match: {final_atlas.shape == target_shape}')
-                print('MATLAB-style cropping applied to BOTH atlas and functional data for atlas calculation')
-                
-                # CRITICAL: Always use the MATLAB-style cropped data for atlas calculation
-                # This ensures both atlas and functional data have identical spatial alignment
                 func_data = final_func
                 atlas_for_calculation = final_atlas  # Use cropped atlas for ROI extraction
                 
@@ -920,30 +708,12 @@ class ProcessWindow(QWidget):
                 atlased_data = np.zeros((fnc_rawdata_len, atl_len), dtype=np.float32)  # Match MATLAB single precision
                 fnc_pro_atlas_masks_flat = atlas_for_calculation.flatten(order='F')  # Use MATLAB-style cropped atlas
                 fnc_data_flat = func_data.reshape(atlas_for_calculation.shape[0] * atlas_for_calculation.shape[1] * atlas_for_calculation.shape[2], fnc_rawdata_len, order='F')  # Use MATLAB-style cropped data
-                
-                print(f'fnc_pro_atlas_masks_flat shape: {fnc_pro_atlas_masks_flat.shape}')
-                print(f'fnc_data_flat shape: {fnc_data_flat.shape}')
-                
+            
                 for ii in range(1, atl_len + 1):  
                     temp_pos = (fnc_pro_atlas_masks_flat == ii)
                     temp_value = fnc_data_flat[temp_pos, :]
-                    
-                    # Debug output to match MATLAB format
-                    voxel_count = np.sum(temp_pos)
-                    print(f'ROI {ii}: {voxel_count} voxels')
-                    
-                    if voxel_count > 0:
-                        if temp_value.shape[0] > 0:
-                            first_timepoint_values = temp_value[:, 0]  # First timepoint
-                            roi_mean = np.nanmean(temp_value, axis=0)[0]  # Mean for first timepoint
-                            roi_std = np.nanstd(temp_value, axis=0)[0]   # Std for first timepoint
-                            print(f'  First few voxels (t=1): {first_timepoint_values[:min(5, len(first_timepoint_values))]}')
-                            print(f'  Mean: {roi_mean:.6f}, Std: {roi_std:.6f}')
-                    
                     roi_timeseries = np.nanmean(temp_value, axis=0)
                     atlased_data[:, ii-1] = roi_timeseries
-                
-                print(f'Final atlased_data shape: {atlased_data.shape[0]} x {atlased_data.shape[1]}')
             else:
                 # .mat input: load full matrix (time × regions)
                 mat = loadmat(file_path)
@@ -957,32 +727,174 @@ class ProcessWindow(QWidget):
 
             # ——— Apply temporal filter if requested ———
             tr = self.settings['TR']
-            fs = 1.0 / tr
-            nyq = fs / 2.0
             if filter_type == 1:
-                # Bandpass filter
-                low = (1.0 / filter_setting2) / nyq
-                high = (1.0 / filter_setting1) / nyq
-                b, a = butter(2, [low, high], btype='band')
-                atlased_data = filtfilt(b, a, atlased_data, axis=0)
+                # Bandpass filter - use MATLAB Engine for exact match
+                if self.eng is not None:
+                    try:
+                        # Convert to MATLAB array and apply bandpass column by column
+                        atlased_data_matlab = matlab.double(atlased_data.tolist())
+                        atl_len = atlased_data.shape[1]
+                        
+                        # Convert frequency range to MATLAB double array
+                        freq_range = matlab.double([1.0/filter_setting2, 1.0/filter_setting1])
+                        sample_rate = 1.0/tr
+                        
+                        # Apply bandpass to each column (ROI) separately to match MATLAB loop
+                        for ii in range(atl_len):
+                            # Extract column ii (0-indexed in Python)
+                            column_data = atlased_data[:, ii]
+                            column_matlab = matlab.double(column_data.tolist())
+                            
+                            # Apply bandpass with MATLAB's parameter order
+                            filtered_column = self.eng.bandpass(column_matlab, 
+                                                                      freq_range, 
+                                                                      sample_rate)
+                            # Convert back to numpy and store
+                            atlased_data[:, ii] = np.array(filtered_column).flatten()
+                        
+                        print(f"Applied MATLAB bandpass filter: {1.0/filter_setting2:.4f} - {1.0/filter_setting1:.4f} Hz")
+                    except Exception as e:
+                        print(f"MATLAB bandpass failed: {e}, falling back to scipy")
+                        # Fallback to original scipy implementation
+                        fs = 1.0 / tr
+                        nyq = fs / 2.0
+                        low = (1.0 / filter_setting2) / nyq
+                        high = (1.0 / filter_setting1) / nyq
+                        b, a = butter(2, [low, high], btype='band')
+                        atlased_data = filtfilt(b, a, atlased_data, axis=0)
+                else:
+                    # Fallback to original scipy implementation
+                    fs = 1.0 / tr
+                    nyq = fs / 2.0
+                    low = (1.0 / filter_setting2) / nyq
+                    high = (1.0 / filter_setting1) / nyq
+                    b, a = butter(2, [low, high], btype='band')
+                    atlased_data = filtfilt(b, a, atlased_data, axis=0)
             elif filter_type == 2:
-                # Highpass filter
-                cutoff = (1.0 / filter_setting1) / nyq
-                b, a = butter(2, cutoff, btype='high')
-                atlased_data = filtfilt(b, a, atlased_data, axis=0)
+                # Highpass filter - use MATLAB Engine for exact match
+                if self.eng is not None:
+                    try:
+                        # Convert cutoff frequency to MATLAB double
+                        cutoff_freq = 1.0/filter_setting1
+                        sample_rate = 1.0/tr
+                        
+                        # Apply highpass to each column (ROI) separately to match MATLAB loop
+                        for ii in range(atlased_data.shape[1]):
+                            # Extract column ii (0-indexed in Python)
+                            column_data = atlased_data[:, ii]
+                            column_matlab = matlab.double(column_data.tolist())
+                            
+                            # Apply highpass with MATLAB's parameter order
+                            filtered_column = self.eng.highpass(column_matlab, 
+                                                               cutoff_freq, 
+                                                               sample_rate)
+                            # Convert back to numpy and store
+                            atlased_data[:, ii] = np.array(filtered_column).flatten()
+                        
+                        print(f"Applied MATLAB highpass filter: {cutoff_freq:.4f} Hz")
+                    except Exception as e:
+                        print(f"MATLAB highpass failed: {e}, falling back to scipy")
+                        # Fallback to original scipy implementation
+                        fs = 1.0 / tr
+                        nyq = fs / 2.0
+                        cutoff = (1.0 / filter_setting1) / nyq
+                        b, a = butter(2, cutoff, btype='high')
+                        atlased_data = filtfilt(b, a, atlased_data, axis=0)
+                else:
+                    # Fallback to original scipy implementation
+                    fs = 1.0 / tr
+                    nyq = fs / 2.0
+                    cutoff = (1.0 / filter_setting1) / nyq
+                    b, a = butter(2, cutoff, btype='high')
+                    atlased_data = filtfilt(b, a, atlased_data, axis=0)
             elif filter_type == 3:
-                # Lowpass filter
-                cutoff = (1.0 / filter_setting1) / nyq
-                b, a = butter(2, cutoff, btype='low')
-                atlased_data = filtfilt(b, a, atlased_data, axis=0)
-            elif filter_type == 5:
-                # Wavelet denoising per column
-                for col in range(atlased_data.shape[1]):
-                    coeffs = pywt.wavedec(atlased_data[:, col], 'db1', level=filter_setting1)
-                    for idx in range(len(coeffs)):
-                        if idx+1 != filter_setting2:
-                            coeffs[idx] = np.zeros_like(coeffs[idx])
-                    atlased_data[:, col] = pywt.waverec(coeffs, 'db1')[:fnc_raw_len]
+                # Lowpass filter - use MATLAB Engine for exact match
+                if self.eng is not None:
+                    try:
+                        # Convert cutoff frequency to MATLAB double
+                        cutoff_freq = 1.0/filter_setting1
+                        sample_rate = 1.0/tr
+                        
+                        # Apply lowpass to each column (ROI) separately to match MATLAB loop
+                        for ii in range(atlased_data.shape[1]):
+                            # Extract column ii (0-indexed in Python)
+                            column_data = atlased_data[:, ii]
+                            column_matlab = matlab.double(column_data.tolist())
+                            
+                            # Apply lowpass with MATLAB's parameter order
+                            filtered_column = self.eng.lowpass(column_matlab, 
+                                                              cutoff_freq, 
+                                                              sample_rate)
+                            # Convert back to numpy and store
+                            atlased_data[:, ii] = np.array(filtered_column).flatten()
+                        
+                        print(f"Applied MATLAB lowpass filter: {cutoff_freq:.4f} Hz")
+                    except Exception as e:
+                        print(f"MATLAB lowpass failed: {e}, falling back to scipy")
+                        # Fallback to original scipy implementation
+                        fs = 1.0 / tr
+                        nyq = fs / 2.0
+                        cutoff = (1.0 / filter_setting1) / nyq
+                        b, a = butter(2, cutoff, btype='low')
+                        atlased_data = filtfilt(b, a, atlased_data, axis=0)
+                else:
+                    # Fallback to original scipy implementation
+                    fs = 1.0 / tr
+                    nyq = fs / 2.0
+                    cutoff = (1.0 / filter_setting1) / nyq
+                    b, a = butter(2, cutoff, btype='low')
+                    atlased_data = filtfilt(b, a, atlased_data, axis=0)
+            elif filter_type == 4:
+                # Wavelet denoising per column - use MATLAB Engine for exact match
+                if self.eng is not None:
+                    try:
+                        # Apply wavelet denoising to each column (ROI) separately to match MATLAB loop
+                        for col in range(atlased_data.shape[1]):
+                            # Extract column data
+                            column_data = atlased_data[:, col]
+                            column_matlab = matlab.double(column_data.tolist())
+                            
+                            # Set variables in MATLAB workspace  
+                            self.eng.workspace['column_data'] = column_matlab
+                            self.eng.workspace['decomp_level'] = filter_setting1
+                            self.eng.workspace['selection_level'] = filter_setting2
+                            
+                            # Apply MATLAB MODWT (Maximal Overlap Discrete Wavelet Transform)
+                            self.eng.eval("temp_data = modwt(column_data, decomp_level);", nargout=0)
+                            
+                            # Create index of excluded channels and zero them out
+                            self.eng.eval("temp_idx = 1:(decomp_level+1);", nargout=0)
+                            self.eng.eval("temp_idx(selection_level) = [];", nargout=0)
+                            self.eng.eval("temp_data(temp_idx, :) = 0;", nargout=0)
+                            
+                            # Reconstruct the signal using IMODWT
+                            self.eng.eval("reconstructed = imodwt(temp_data);", nargout=0)
+                            
+                            # Get the result back to Python
+                            reconstructed_matlab = self.eng.workspace['reconstructed']
+                            reconstructed_array = np.array(reconstructed_matlab).flatten()
+                            
+                            # Store result 
+                            atlased_data[:, col] = reconstructed_array
+                        
+                        print(f"Applied MATLAB MODWT filter: level={filter_setting1}, selection={filter_setting2}")
+                    except Exception as e:
+                        print(f"MATLAB MODWT failed: {e}, falling back to pywt")
+                        # Fallback to original pywt implementation
+                        for col in range(atlased_data.shape[1]):
+                            coeffs = pywt.wavedec(atlased_data[:, col], 'db1', level=filter_setting1)
+                            for idx in range(len(coeffs)):
+                                if idx+1 != filter_setting2:
+                                    coeffs[idx] = np.zeros_like(coeffs[idx])
+                            atlased_data[:, col] = pywt.waverec(coeffs, 'db1')[:fnc_raw_len]
+                else:
+                    # Fallback to original pywt implementation
+                    for col in range(atlased_data.shape[1]):
+                        coeffs = pywt.wavedec(atlased_data[:, col], 'db1', level=filter_setting1)
+                        for idx in range(len(coeffs)):
+                            if idx+1 != filter_setting2:
+                                coeffs[idx] = np.zeros_like(coeffs[idx])
+                        atlased_data[:, col] = pywt.waverec(coeffs, 'db1')[:fnc_raw_len]
 
             # ——— Sliding-window correlation ———
             corr_data = np.zeros((fnc_window_count, atl_len, atl_len), dtype=np.float32)
@@ -1007,11 +919,6 @@ class ProcessWindow(QWidget):
                 'd_kernel': self.settings['kernel'],
                 'd_atlas_list': self.settings['atlas_list']
             }
-            
-            # Add atlased_data tracking to output (only for image processing)
-            if self.file_format_dropdown.currentIndex() == 0:
-                # Add intermediate data tracking for resampling/transformation isolation
-                subj_data['intermediate_data'] = intermediate_data
             fname = os.path.splitext(self.settings['file_list'][i])[0]
             savemat(os.path.join(fnc_out_path, f"{fname}.mat"), {'subj_data': subj_data}, format='5', do_compression=True)
             progress_dialog.setLabelText(f"{i+1}/{fnc_pro_filelength}: Done")
