@@ -470,7 +470,7 @@ class ProcessWindow(QWidget):
                 fnc_pro_atlas_masks = nib.load(atlas_img).get_fdata().astype(np.int32)
             elif atlas_index == 1:
                 # Use default AAL2 atlas
-                atlas_img = os.path.join(self.settings.get('path', ''), 'atlas', 'AAL2v1_2mm.nii.txt')
+                atlas_img = os.path.join(self.settings.get('path', ''), 'atlas', 'AAL2v1_2mm.nii.gz')
                 fnc_pro_atlas_masks = nib.load(atlas_img).get_fdata().astype(np.int32)
             else:
                 QMessageBox.critical(self, "Error", "Invalid atlas selection")

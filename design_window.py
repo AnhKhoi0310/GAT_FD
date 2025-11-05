@@ -317,9 +317,11 @@ class DesignWindow(QWidget):
     def gatd_p_task(self):
         value = self.cb_task.isChecked()
         if value:
-            self.gatd_plot.pholder_hrf.set_visible(True)
+            self.gatd_plot.pholder_design.set_visible(True)
         else:
-            self.gatd_plot.pholder_hrf.set_visible(False)
+            self.gatd_plot.pholder_design.set_visible(False)
+        self.canvas.draw()
+        
     # Value changed function: HemodynamicResponseCheckBox
     def gatd_p_hrf(self):
         value = self.cb_hrf.isChecked()
@@ -327,6 +329,8 @@ class DesignWindow(QWidget):
             self.gatd_plot.pholder_hrf.set_visible(True)
         else:
             self.gatd_plot.pholder_hrf.set_visible(False)
+        self.canvas.draw()
+        
     def gatd_p_window(self):
         value = self.cb_mask.isChecked()
 
@@ -336,6 +340,7 @@ class DesignWindow(QWidget):
         else:
             for i in range(self.gatd_plot.max_overlap_window):
                 self.gatd_plot.pholder_window[i].set_visible(False)
+        self.canvas.draw()
     # Button pushed function: SaveDesignMatrixButton
     def gatd_output_mat(self):
         filename, _ = QFileDialog.getSaveFileName(
