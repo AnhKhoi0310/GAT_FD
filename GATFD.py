@@ -40,9 +40,9 @@ class MainWindow(QWidget):
         btn_design.clicked.connect(self.open_design_window)
         layout.addWidget(btn_design)
 
-        btn_corr = QPushButton('Correlation')
-        btn_corr.clicked.connect(self.open_corr_window)
-        layout.addWidget(btn_corr)
+        # btn_corr = QPushButton('Correlation')
+        # btn_corr.clicked.connect(self.open_corr_window)
+        # layout.addWidget(btn_corr)
 
         self.setLayout(layout)
 

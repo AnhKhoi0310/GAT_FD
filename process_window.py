@@ -464,18 +464,20 @@ class ProcessWindow(QWidget):
                 fnc_pro_atlas_masks = np.sum([m * (i+1)
                                             for i, m in enumerate(masks)], axis=0)
                 atlas_img = fnc_pro_atlas_masks  # use array directly
+                atl_len = int(fnc_pro_atlas_masks.max())
             elif atlas_index == 0:
                 # Use default Brainetome atlas
                 atlas_img = os.path.join(self.settings.get('path', ''), 'atlas', 'BN_atlas_1_25mm.nii')
                 fnc_pro_atlas_masks = nib.load(atlas_img).get_fdata().astype(np.int32)
+                atl_len = 246  # Brainetome 1.25mm - match MATLAB hardcoded value
             elif atlas_index == 1:
                 # Use default AAL2 atlas
                 atlas_img = os.path.join(self.settings.get('path', ''), 'atlas', 'AAL2v1_2mm.nii.gz')
                 fnc_pro_atlas_masks = nib.load(atlas_img).get_fdata().astype(np.int32)
+                atl_len = 94  # AAL2v1 2mm - match MATLAB hardcoded value
             else:
                 QMessageBox.critical(self, "Error", "Invalid atlas selection")
                 return
-            atl_len = int(fnc_pro_atlas_masks.max())
             fnc_window_size = self.settings['window_size']
         else:
             # Matrix input: atlas_list length defines number of regions
@@ -705,7 +707,7 @@ class ProcessWindow(QWidget):
                 # Use the MATLAB-style cropped atlas and functional data for ROI extraction
                 fnc_rawdata_len = func_data.shape[3]
                 
-                atlased_data = np.zeros((fnc_rawdata_len, atl_len), dtype=np.float32)  # Match MATLAB single precision
+                atlased_data = np.zeros((fnc_rawdata_len, atl_len), dtype=np.float64)  # Match MATLAB double precision
                 fnc_pro_atlas_masks_flat = atlas_for_calculation.flatten(order='F')  # Use MATLAB-style cropped atlas
                 fnc_data_flat = func_data.reshape(atlas_for_calculation.shape[0] * atlas_for_calculation.shape[1] * atlas_for_calculation.shape[2], fnc_rawdata_len, order='F')  # Use MATLAB-style cropped data
             
@@ -718,7 +720,7 @@ class ProcessWindow(QWidget):
                 # .mat input: load full matrix (time × regions)
                 mat = loadmat(file_path)
                 key = next(k for k in mat if not k.startswith('__'))
-                atlased_data = mat[key].astype(np.float32)
+                atlased_data = mat[key].astype(np.float64)
                 fnc_raw_len, _ = atlased_data.shape
                 fnc_window_count = fnc_raw_len - fnc_window_size + 1
                 atl_len = atlased_data.shape[1]
@@ -897,7 +899,7 @@ class ProcessWindow(QWidget):
                         atlased_data[:, col] = pywt.waverec(coeffs, 'db1')[:fnc_raw_len]
 
             # ——— Sliding-window correlation ———
-            corr_data = np.zeros((fnc_window_count, atl_len, atl_len), dtype=np.float32)
+            corr_data = np.zeros((fnc_window_count, atl_len, atl_len), dtype=np.float64)
             for w in range(fnc_window_count):
                 window = atlased_data[w:w+fnc_window_size, :]
                 if self.settings['kernel'] == 2:

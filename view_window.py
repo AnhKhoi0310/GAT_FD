@@ -6,6 +6,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import numpy as np
 import scipy.io
+import h5py
 
 class ViewWindow(QWidget    ):
     def __init__(self):
@@ -13,21 +14,42 @@ class ViewWindow(QWidget    ):
         self.createComponents()
 
     def gatv_load_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(  self, "Select Conditions", "","MAT files (*.mat)")
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select Conditions", "","MAT files (*.mat)")
         if not file_path:
             return
-        # Load .mat file with options to mimic MATLAB structure
-        mat_data = scipy.io.loadmat(file_path, squeeze_me=True, struct_as_record=False)
-        subj_data = mat_data['subj_data']
-        if isinstance(subj_data, np.ndarray):
-            subj_data = subj_data.item()  # unwrap 1x1 array to struct
-        d_corr = subj_data.d_corr
+        
+        try:
+            # First try to load with scipy.io.loadmat (for older MATLAB formats)
+            mat_data = scipy.io.loadmat(file_path, squeeze_me=True, struct_as_record=False)
+            subj_data = mat_data['subj_data']
+            if isinstance(subj_data, np.ndarray):
+                subj_data = subj_data.item()  # unwrap 1x1 array to struct
+            d_corr = subj_data.d_corr
+        except NotImplementedError:
+            # If that fails, try h5py for MATLAB v7.3 files
+            print("Detected MATLAB v7.3 format, using HDF5 reader...")
+            try:
+                with h5py.File(file_path, 'r') as f:
+                    # Navigate the HDF5 structure to find d_corr
+                    subj_data_ref = f['subj_data']
+                    d_corr_ref = subj_data_ref['d_corr']
+                    # Read the data and transpose if needed (MATLAB vs Python array ordering)
+                    d_corr = np.array(d_corr_ref).T  # Transpose to match MATLAB ordering
+                    
+            except Exception as hdf5_error:
+                QMessageBox.critical(self, "Error", f"Failed to load file: {hdf5_error}")
+                return
+        except Exception as general_error:
+            QMessageBox.critical(self, "Error", f"Failed to load file: {general_error}")
+            return
+        
         self.gatv_setting['networks'] = d_corr
         self.gatv_setting['frame_limit'] = [1, len(d_corr)]
-        self.frame_slider.setMinimum(0)
-        self.frame_slider.setMaximum(len(d_corr))
+        self.gatv_setting['frame_cur'] = 1  # Initialize frame cursor
+        self.frame_slider.setMinimum(1)  # Start from 1 to match MATLAB indexing
+        self.frame_slider.setMaximum(len(d_corr))  # Maximum frame number
         print("Loaded file:", file_path.split("/")[-1])
-        print("Frames:", d_corr)
+        print("d_corr shape:", d_corr.shape)
         print("Total frames:", len(d_corr))
         self.gatv_update_network()
 
@@ -92,8 +114,13 @@ class ViewWindow(QWidget    ):
             self.frame_slider_cursor.setText(str(self.gatv_setting['frame_cur']))
             self.network_ax.clear()
             data = self.gatv_setting['networks']
+            
+            # Ensure frame_cur is within valid bounds
+            max_frames = len(data) if data.ndim == 3 else 1
+            frame_idx = min(max(1, self.gatv_setting['frame_cur']), max_frames) - 1  # Convert to 0-based index
+            
             if data.ndim == 3:
-                matrix = data[self.gatv_setting['frame_cur'] - 1, :, :]
+                matrix = data[frame_idx, :, :]
             else:
                 matrix = data  # just one matrix, no frame dimension
             self.network_ax.imshow(matrix, cmap='jet')
@@ -123,12 +150,13 @@ class ViewWindow(QWidget    ):
         # layout.addWidget(self.frame_slider_label, 0.25, 0)
 
         self.frame_slider = QSlider(Qt.Orientation.Horizontal)
-        self.frame_slider.setMinimum(0)
+        self.frame_slider.setMinimum(1)  # Start from 1 to match MATLAB indexing
         self.frame_slider.setMaximum(100)
+        self.frame_slider.setValue(1)  # Initialize to frame 1
         self.frame_slider.valueChanged.connect(self.gatv_update_network)
         layout.addWidget(self.frame_slider, 1, 0)
 
-        self.frame_slider_cursor = QLabel("0")
+        self.frame_slider_cursor = QLabel("1")  # Initialize to frame 1
         layout.addWidget(self.frame_slider_cursor, 1, 2)
 
         # LoadProcessedFileButton
