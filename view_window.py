@@ -123,7 +123,7 @@ class ViewWindow(QWidget    ):
                 matrix = data[frame_idx, :, :]
             else:
                 matrix = data  # just one matrix, no frame dimension
-            self.network_ax.imshow(matrix, cmap='jet')
+            self.network_ax.imshow(matrix, cmap='viridis')
             self.network_canvas.draw()
 
     def createComponents(self):
