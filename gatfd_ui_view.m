@@ -149,10 +149,13 @@ classdef gatfd_ui_view < matlab.apps.AppBase
                 temp_data_file_list=load(file_fullpath,'dnet_data_files');
                 temp_data_measures=load(file_fullpath,'dnet_data_measures_glob');
                 temp_data_size=size(temp_data.dnet_data_data_mat_global,1,2,3,4);
+                fprintf('Original data shape: [%d, %d, %d]\n', temp_data_size(1), temp_data_size(2), temp_data_size(3));
                 app.gatv_data.data=zeros(temp_data_size(1),temp_data_size(2),temp_data_size(3)+1,temp_data_size(4)+1);
                 app.gatv_data.data(:,:,2:end,2:end)=temp_data.dnet_data_data_mat_global;
                 app.gatv_data.data(:,:,1,2:end)=mean(temp_data.dnet_data_data_mat_global,3);
                 app.gatv_data.data(:,:,:,1)=mean(app.gatv_data.data(:,:,:,2:end),4);
+                fprintf('Processed data shape: [%d, %d, %d, %d]\n', size(app.gatv_data.data,1), size(app.gatv_data.data,2), size(app.gatv_data.data,3), size(app.gatv_data.data,4));
+                fprintf('Successfully loaded network property file\n');
                 app.ThresholdDropDown.Items = [{'Mean'},cellfun(@num2str,num2cell(temp_data_thres_list.dnet_data_threshold_list),'UniformOutput',false)];
                 app.ThresholdDropDown.ItemsData = 1:length(app.ThresholdDropDown.Items);
                 app.SubjectDropDown.Items = [{'GroupAverage'},temp_data_file_list.dnet_data_files];
@@ -169,18 +172,32 @@ classdef gatfd_ui_view < matlab.apps.AppBase
         % Button pushed function: UpdateButton
         function gatv_update_timeseries(app, event)
             if isnumeric(app.MeasureDropDown.Value) && isnumeric(app.ThresholdDropDown.Value) && isnumeric(app.SubjectDropDown.Value)
+                fprintf('Selected indices (MATLAB 1-based): measure=%d, threshold=%d, subject=%d\n', app.MeasureDropDown.Value, app.ThresholdDropDown.Value, app.SubjectDropDown.Value);
+                fprintf('Data shape: [%d, %d, %d, %d]\n', size(app.gatv_data.data,1), size(app.gatv_data.data,2), size(app.gatv_data.data,3), size(app.gatv_data.data,4));
                 yyaxis(app.UIAxes_Timeseries,'left');
                 temp_data=app.gatv_data.data(:,app.MeasureDropDown.Value,app.ThresholdDropDown.Value,app.SubjectDropDown.Value);
+                fprintf('temp_data shape: [%d], min/max: %.6f / %.6f\n', length(temp_data), min(temp_data), max(temp_data));
                 if app.gatv_setting.iscondition
-                    plot(app.UIAxes_Timeseries,app.gatv_data.data_length_diff:app.gatv_data.data_length_diff-1+app.gatv_data.data_frame_length,temp_data,'b','LineWidth',2);
+                    fprintf('Plotting with condition overlay\n');
+                    fprintf('Condition plot: data_length_diff=%d, data_frame_length=%d, data_length=%d\n', app.gatv_data.data_length_diff, app.gatv_data.data_frame_length, app.gatv_data.data_length);
+                    x_range = app.gatv_data.data_length_diff:app.gatv_data.data_length_diff-1+app.gatv_data.data_frame_length;
+                    fprintf('Left plot x_range: [%d %d %d %d %d]...[%d %d %d %d %d] (length=%d)\n', x_range(1), x_range(2), x_range(3), x_range(4), x_range(5), x_range(end-4), x_range(end-3), x_range(end-2), x_range(end-1), x_range(end), length(x_range));
+                    plot(app.UIAxes_Timeseries,x_range,temp_data,'b','LineWidth',2);
                     ylim(app.UIAxes_Timeseries,'auto')
                     yyaxis(app.UIAxes_Timeseries,'right');
-                    plot(app.UIAxes_Timeseries,1:app.gatv_data.data_length,app.gatv_setting.condition.dfnc_reponse,'--r','LineWidth',2);
+                    x_range_condition = 1:app.gatv_data.data_length;
+                    fprintf('Right plot x_range: [%d %d %d %d %d]...[%d %d %d %d %d] (length=%d)\n', x_range_condition(1), x_range_condition(2), x_range_condition(3), x_range_condition(4), x_range_condition(5), x_range_condition(end-4), x_range_condition(end-3), x_range_condition(end-2), x_range_condition(end-1), x_range_condition(end), length(x_range_condition));
+                    fprintf('dfnc_reponse shape: [%d], min/max: %.6f / %.6f\n', length(app.gatv_setting.condition.dfnc_reponse), min(app.gatv_setting.condition.dfnc_reponse), max(app.gatv_setting.condition.dfnc_reponse));
+                    plot(app.UIAxes_Timeseries,x_range_condition,app.gatv_setting.condition.dfnc_reponse,'--r','LineWidth',2);
                     ylim(app.UIAxes_Timeseries,'auto')
                 else
-                    plot(app.UIAxes_Timeseries,1:length(temp_data),temp_data,'b','LineWidth',2);
+                    fprintf('Plotting without condition overlay\n');
+                    x_range = 1:length(temp_data);
+                    fprintf('Simple plot x_range: [%d %d %d %d %d]...[%d %d %d %d %d] (length=%d)\n', x_range(1), x_range(2), x_range(3), x_range(4), x_range(5), x_range(end-4), x_range(end-3), x_range(end-2), x_range(end-1), x_range(end), length(x_range));
+                    plot(app.UIAxes_Timeseries,x_range,temp_data,'b','LineWidth',2);
                     ylim(app.UIAxes_Timeseries,'auto')
                 end
+                fprintf('Timeseries plot updated successfully\n');
             else
                 errordlg("Please make selection","Error");
             end

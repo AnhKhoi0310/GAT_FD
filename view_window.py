@@ -1,8 +1,9 @@
 # view_window.py
-from PyQt6.QtWidgets import ( QWidget, QLabel, QPushButton, QSlider, QGridLayout, QFileDialog, QMessageBox, QComboBox)
+from PyQt6.QtWidgets import ( QWidget, QLabel, QPushButton, QSlider, QGridLayout, QFileDialog, QMessageBox, QComboBox, QVBoxLayout)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeyEvent
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 import numpy as np
 import scipy.io
@@ -108,6 +109,235 @@ class ViewWindow(QWidget    ):
         self.gatv_data['data_length_diff'] = int(np.floor(
             (self.gatv_data['data_length'] - self.gatv_data['data_frame_length']) / 2
         ))
+
+    def gatv_load_measure(self):
+        """Load network property file - equivalent to MATLAB gatv_load_measure function"""
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select Conditions", "", "MAT files (*.mat)")
+        if not file_path:
+            return
+        
+        try:
+            # First try to load with scipy.io.loadmat (for older MATLAB formats)
+            mat_contents = scipy.io.loadmat(file_path, squeeze_me=True, struct_as_record=False)
+            
+            # Try to load the expected data structures
+            dnet_data_data_mat_global = mat_contents.get('dnet_data_data_mat_global', None)
+            dnet_data_threshold_list = mat_contents.get('dnet_data_threshold_list', None)
+            dnet_data_files = mat_contents.get('dnet_data_files', None)
+            dnet_data_measures_glob = mat_contents.get('dnet_data_measures_glob', None)
+            
+        except NotImplementedError:
+            # If that fails, try h5py for MATLAB v7.3 files
+            print("Detected MATLAB v7.3 format, using HDF5 reader...")
+            try:
+                with h5py.File(file_path, 'r') as f:
+                    # Navigate the HDF5 structure to find the data
+                    # Note: h5py reads MATLAB arrays with transposed dimensions, so we need to transpose back
+                    if 'dnet_data_data_mat_global' in f:
+                        dnet_data_data_mat_global = np.array(f['dnet_data_data_mat_global']).T  # Transpose to match MATLAB ordering
+                    else:
+                        dnet_data_data_mat_global = None
+                    
+                    if 'dnet_data_threshold_list' in f:
+                        dnet_data_threshold_list = np.array(f['dnet_data_threshold_list']).T
+                    else:
+                        dnet_data_threshold_list = None
+                        
+                    if 'dnet_data_files' in f:
+                        dnet_data_files = np.array(f['dnet_data_files']).T
+                    else:
+                        dnet_data_files = None
+                        
+                    if 'dnet_data_measures_glob' in f:
+                        dnet_data_measures_glob = np.array(f['dnet_data_measures_glob']).T
+                    else:
+                        dnet_data_measures_glob = None
+                    
+            except Exception as hdf5_error:
+                QMessageBox.critical(self, "Error", f"Failed to load HDF5 file: {hdf5_error}")
+                return
+        except Exception as general_error:
+            QMessageBox.critical(self, "Error", f"Failed to load file: {general_error}")
+            return
+        
+        if dnet_data_data_mat_global is None:
+            QMessageBox.critical(self, "Error", "No global measures to display")
+            return
+            
+        try:
+            # Process the data similar to MATLAB version
+            temp_data_size = dnet_data_data_mat_global.shape
+            print(f"Original data shape: {temp_data_size}")
+            
+            if len(temp_data_size) == 4:
+                # Create expanded data array with means (MATLAB: temp_data_size(3)+1, temp_data_size(4)+1)
+                expanded_shape = (temp_data_size[0], temp_data_size[1], temp_data_size[2] + 1, temp_data_size[3] + 1)
+                self.gatv_data['data'] = np.zeros(expanded_shape)
+                
+                # Copy original data (MATLAB: app.gatv_data.data(:,:,2:end,2:end)=temp_data.dnet_data_data_mat_global;)
+                self.gatv_data['data'][:, :, 1:, 1:] = dnet_data_data_mat_global
+                
+                # Calculate means (MATLAB: app.gatv_data.data(:,:,1,2:end)=mean(temp_data.dnet_data_data_mat_global,3);)
+                self.gatv_data['data'][:, :, 0, 1:] = np.mean(dnet_data_data_mat_global, axis=2)
+                # MATLAB: app.gatv_data.data(:,:,:,1)=mean(app.gatv_data.data(:,:,:,2:end),4);
+                self.gatv_data['data'][:, :, :, 0] = np.mean(self.gatv_data['data'][:, :, :, 1:], axis=3)
+                print(f"Expanded data shape: {self.gatv_data['data'].shape}")
+            else:
+                # For 3D or other dimensioned data, we need to expand appropriately
+                if len(temp_data_size) == 3:
+                    # If 3D, assume it's (timepoints, measures, thresholds) and add subjects dimension
+                    expanded_shape = (temp_data_size[0], temp_data_size[1], temp_data_size[2] + 1, 2)
+                    self.gatv_data['data'] = np.zeros(expanded_shape)
+                    self.gatv_data['data'][:, :, 1:, 1] = dnet_data_data_mat_global
+                    self.gatv_data['data'][:, :, 0, 1] = np.mean(dnet_data_data_mat_global, axis=2)
+                    self.gatv_data['data'][:, :, :, 0] = np.mean(self.gatv_data['data'][:, :, :, 1:], axis=3)
+                else:
+                    # For other cases, try to reshape to 4D
+                    self.gatv_data['data'] = dnet_data_data_mat_global.reshape(temp_data_size[0], temp_data_size[1], 1, 1)
+                print(f"Processed data shape: {self.gatv_data['data'].shape}")
+            
+            # Update threshold dropdown
+            self.threshold_dropdown.clear()
+            self.threshold_dropdown.addItem("Mean")
+            if dnet_data_threshold_list is not None:
+                threshold_items = [str(x) for x in dnet_data_threshold_list.flatten()]
+                self.threshold_dropdown.addItems(threshold_items)
+            
+            # Update subject dropdown  
+            self.subject_dropdown.clear()
+            self.subject_dropdown.addItem("GroupAverage")
+            if dnet_data_files is not None:
+                if isinstance(dnet_data_files, np.ndarray):
+                    file_items = [str(x) for x in dnet_data_files.flatten()]
+                else:
+                    file_items = [str(dnet_data_files)]
+                self.subject_dropdown.addItems(file_items)
+                
+            # Update measure dropdown
+            self.measure_dropdown.clear()
+            if dnet_data_measures_glob is not None:
+                if isinstance(dnet_data_measures_glob, np.ndarray):
+                    measure_items = [str(x) for x in dnet_data_measures_glob.flatten()]
+                else:
+                    measure_items = [str(dnet_data_measures_glob)]
+                self.measure_dropdown.addItems(measure_items)
+                
+            print("Successfully loaded network property file")
+            
+        except Exception as processing_error:
+            QMessageBox.critical(self, "Error", f"Failed to process network property file: {processing_error}")
+
+    def gatv_update_timeseries(self):
+        """Update timeseries plot - equivalent to MATLAB gatv_update_timeseries function"""
+        # Check if all dropdowns have valid selections
+        if (self.measure_dropdown.currentIndex() < 0 or 
+            self.threshold_dropdown.currentIndex() < 0 or 
+            self.subject_dropdown.currentIndex() < 0):
+            QMessageBox.critical(self, "Error", "Please make selection")
+            return
+            
+        if 'data' not in self.gatv_data:
+            QMessageBox.critical(self, "Error", "Please load network property file first")
+            return
+        
+        try:
+            # Get indices for data selection - MATLAB uses 1-based indexing via ItemsData
+            # MATLAB: MeasureDropDown.Value, ThresholdDropDown.Value, SubjectDropDown.Value
+            # MATLAB ItemsData = 1:length(Items), so Values are 1, 2, 3, ...
+            # Our Python data array is set up so: index 0 = "Mean", index 1+ = actual data
+            # Python currentIndex() returns 0, 1, 2, ... which directly maps to our array indices
+            measure_idx = self.measure_dropdown.currentIndex()
+            threshold_idx = self.threshold_dropdown.currentIndex() 
+            subject_idx = self.subject_dropdown.currentIndex()
+            
+            print(f"Selected indices (0-based for Python array): measure={measure_idx}, threshold={threshold_idx}, subject={subject_idx}")
+            print(f"Data shape: {self.gatv_data['data'].shape}")
+            
+            # Extract timeseries data (MATLAB: temp_data=app.gatv_data.data(:,MeasureDropDown.Value,ThresholdDropDown.Value,SubjectDropDown.Value))
+            temp_data = self.gatv_data['data'][:, measure_idx, threshold_idx, subject_idx]
+            print(f"temp_data shape: {temp_data.shape}, min/max: {np.min(temp_data):.6f} / {np.max(temp_data):.6f}")
+            
+            # Clear the axis and any twin axes
+            self.timeseries_ax.clear()
+            
+            # Remove any existing twin axes to start fresh
+            for ax in self.timeseries_canvas.figure.axes[1:]:
+                ax.remove()
+            
+            # MATLAB: yyaxis(app.UIAxes_Timeseries,'left');
+            # This sets the left y-axis as active in MATLAB
+            
+            if self.gatv_setting.get('iscondition', 0):
+                print("Plotting with condition overlay")
+                # Plot with condition overlay (MATLAB logic)
+                data_length_diff = self.gatv_data.get('data_length_diff', 0)
+                data_frame_length = self.gatv_data.get('data_frame_length', len(temp_data))
+                data_length = self.gatv_data.get('data_length', len(temp_data))
+                
+                print(f"Condition plot: data_length_diff={data_length_diff}, data_frame_length={data_frame_length}, data_length={data_length}")
+                
+                # MATLAB: plot(app.UIAxes_Timeseries,app.gatv_data.data_length_diff:app.gatv_data.data_length_diff-1+app.gatv_data.data_frame_length,temp_data,'b','LineWidth',2);
+                # MATLAB range: data_length_diff:(data_length_diff-1+data_frame_length) = data_length_diff:(data_length_diff+data_frame_length-1)
+                # Python equivalent: range(data_length_diff, data_length_diff + data_frame_length) but using MATLAB 1-based indexing convention
+                x_range = np.arange(data_length_diff, data_length_diff + data_frame_length)  # MATLAB: data_length_diff:data_length_diff-1+data_frame_length
+                print(f"Left plot x_range: {x_range[:5]}...{x_range[-5:]} (length={len(x_range)})")
+                
+                self.timeseries_ax.plot(x_range, temp_data, 'b', linewidth=2, label='Network Property')
+                self.timeseries_ax.relim()  # Recalculate limits
+                self.timeseries_ax.autoscale_view()  # Auto-scale the view (equivalent to MATLAB ylim('auto'))
+                self.timeseries_ax.set_ylabel('Network Measure', color='b')
+                self.timeseries_ax.tick_params(axis='y', labelcolor='b')
+                
+                # MATLAB: yyaxis(app.UIAxes_Timeseries,'right');
+                # MATLAB: plot(app.UIAxes_Timeseries,1:app.gatv_data.data_length,app.gatv_setting.condition.dfnc_reponse,'--r','LineWidth',2);
+                timeseries_ax_right = self.timeseries_ax.twinx()
+                
+                if 'condition' in self.gatv_setting and hasattr(self.gatv_setting['condition'], 'dfnc_reponse'):
+                    dfnc_reponse = np.array(self.gatv_setting['condition'].dfnc_reponse).flatten()
+                    x_range_condition = np.arange(1, data_length + 1)  # MATLAB: 1:app.gatv_data.data_length
+                    print(f"Right plot x_range: {x_range_condition[:5]}...{x_range_condition[-5:]} (length={len(x_range_condition)})")
+                    print(f"dfnc_reponse shape: {dfnc_reponse.shape}, min/max: {np.min(dfnc_reponse):.6f} / {np.max(dfnc_reponse):.6f}")
+                    
+                    timeseries_ax_right.plot(x_range_condition, dfnc_reponse, '--r', linewidth=2, label='Task Response')
+                    timeseries_ax_right.relim()  # Recalculate limits
+                    timeseries_ax_right.autoscale_view()  # Auto-scale the view (equivalent to MATLAB ylim('auto'))
+                    timeseries_ax_right.set_ylabel('Task Response', color='r')
+                    timeseries_ax_right.tick_params(axis='y', labelcolor='r')
+                else:
+                    print(f"No condition.dfnc_reponse found. Available condition keys: {list(self.gatv_setting.get('condition', {}).__dict__.keys()) if 'condition' in self.gatv_setting else 'No condition'}")
+                    # Still create the right axis but don't plot anything
+                    timeseries_ax_right.set_ylabel('No Task Response', color='r')
+                    timeseries_ax_right.tick_params(axis='y', labelcolor='r')
+                    
+            else:
+                print("Plotting without condition overlay")
+                # MATLAB: plot(app.UIAxes_Timeseries,1:length(temp_data),temp_data,'b','LineWidth',2);
+                x_range = np.arange(1, len(temp_data) + 1)  # MATLAB 1-based indexing: 1:length(temp_data)
+                print(f"Simple plot x_range: {x_range[:5]}...{x_range[-5:]} (length={len(x_range)})")
+                
+                self.timeseries_ax.plot(x_range, temp_data, 'b', linewidth=2, label='Network Property')
+                # MATLAB: ylim(app.UIAxes_Timeseries,'auto') - use relim/autoscale_view for matplotlib
+                self.timeseries_ax.relim()
+                self.timeseries_ax.autoscale_view()
+                self.timeseries_ax.set_ylabel('Network Measure', color='b')
+                self.timeseries_ax.tick_params(axis='y', labelcolor='b')
+            
+            # Set title and labels
+            self.timeseries_ax.set_title('Network Property Timeseries')
+            self.timeseries_ax.set_xlabel('Time (frames)')
+            self.timeseries_ax.grid(True, alpha=0.3)
+            
+            # Refresh the canvas
+            self.timeseries_canvas.draw()
+            
+            print("Timeseries plot updated successfully")
+            
+        except Exception as e:
+            print(f"Error in gatv_update_timeseries: {e}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Error", f"Failed to update timeseries: {e}")
+
     def gatv_update_network(self):
         if 'networks' in self.gatv_setting:
             self.gatv_setting['frame_cur'] = int(self.frame_slider.value())
@@ -169,10 +399,21 @@ class ViewWindow(QWidget    ):
         self.task_design_ax = self.task_design_canvas.figure.add_subplot(111)
         layout.addWidget(self.task_design_canvas, 0, 0)
 
-        # UIAxes_Timeseries
+        # UIAxes_Timeseries with Navigation Toolbar
+        timeseries_widget = QWidget()
+        timeseries_layout = QVBoxLayout(timeseries_widget)
+        
         self.timeseries_canvas = FigureCanvas(Figure())
         self.timeseries_ax = self.timeseries_canvas.figure.add_subplot(111)
-        layout.addWidget(self.timeseries_canvas, 3, 0, 1, 3)
+        self.timeseries_ax.set_title("Network Properties Timeseries")
+        
+        # Add navigation toolbar for zoom/pan functionality
+        self.timeseries_toolbar = NavigationToolbar(self.timeseries_canvas, timeseries_widget)
+        
+        timeseries_layout.addWidget(self.timeseries_toolbar)
+        timeseries_layout.addWidget(self.timeseries_canvas)
+        
+        layout.addWidget(timeseries_widget, 3, 0, 1, 3)
 
         # LoadTemporalMaskButton
         self.load_temporal_button = QPushButton("Load Temporal Mask")
@@ -181,7 +422,7 @@ class ViewWindow(QWidget    ):
 
         # LoadNetworkPropertyFileButton
         self.load_property_button = QPushButton("Load Network Property File")
-        # self.load_property_button.clicked.connect(self.gatv_load_measure)
+        self.load_property_button.clicked.connect(self.gatv_load_measure)
         layout.addWidget(self.load_property_button, 4, 0)
 
         # Dropdown Labels and Widgets
@@ -206,7 +447,7 @@ class ViewWindow(QWidget    ):
         layout.addWidget(self.subject_dropdown, 7, 1)
 
         self.update_button = QPushButton("Update")
-        # self.update_button.clicked.connect(self.gatv_update_timeseries)
+        self.update_button.clicked.connect(self.gatv_update_timeseries)
         layout.addWidget(self.update_button, 8, 0)
 
         self.show()
