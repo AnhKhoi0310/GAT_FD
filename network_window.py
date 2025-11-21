@@ -12,6 +12,7 @@ import os
 import bct  # bctpy package for Brain Connectivity Toolbox functions
 import scipy.io as sio
 import pandas as pd
+import h5py
 from library.degrees_und  import degrees_und 
 from library.makerandCIJ_und import makerandCIJ_und 
 from library.modularity_und import modularity_und
@@ -200,8 +201,50 @@ class NetworkWindow(QWidget):
 
         # Load first file
         first_file = file_paths[0]
-        temp_feature = loadmat(first_file, squeeze_me=True, struct_as_record=False)
-        subj_data = temp_feature.get('subj_data', None)
+        try:
+            # First try to load with scipy.io.loadmat (for older MATLAB formats)
+            temp_feature = loadmat(first_file, squeeze_me=True, struct_as_record=False)
+            subj_data = temp_feature.get('subj_data', None)
+        except NotImplementedError:
+            # If that fails, try h5py for MATLAB v7.3 files
+            print("Detected MATLAB v7.3 format, using HDF5 reader...")
+            try:
+                with h5py.File(first_file, 'r') as f:
+                    # Create a simple object to hold the data
+                    class SubjData:
+                        pass
+                    subj_data = SubjData()
+                    
+                    # Navigate the HDF5 structure to find the data
+                    subj_data_ref = f['subj_data']
+                    if 'd_corr' in subj_data_ref:
+                        d_corr_ref = subj_data_ref['d_corr']
+                        # Read the data and transpose if needed (MATLAB vs Python array ordering)
+                        subj_data.d_corr = np.array(d_corr_ref).T  # Transpose to match MATLAB ordering
+                    
+                    if 'd_atlas_list' in subj_data_ref:
+                        atlas_ref = subj_data_ref['d_atlas_list']
+                        # Handle string array conversion
+                        if atlas_ref.dtype.kind == 'O':  # Object array (cell array in MATLAB)
+                            atlas_list = []
+                            for i in range(atlas_ref.shape[0]):
+                                ref = atlas_ref[i, 0]
+                                atlas_list.append(''.join(chr(c) for c in f[ref][:].flatten()))
+                            subj_data.d_atlas_list = np.array(atlas_list)
+                        else:
+                            subj_data.d_atlas_list = np.array(atlas_ref).flatten()
+                    
+            except Exception as hdf5_error:
+                QMessageBox.critical(self, "Error", f"Failed to load HDF5 file: {hdf5_error}")
+                return
+        except Exception as general_error:
+            QMessageBox.critical(self, "Error", f"Failed to load file: {general_error}")
+            return
+        
+        if subj_data is None:
+            QMessageBox.critical(self, "Error", "subj_data not found in file")
+            return
+            
         d_corr = getattr(subj_data, 'd_corr', None)
         # print("d_corr.ndim =", d_corr.ndim, "shape =", d_corr.shape)
         # print("d_corr =", d_corr[0][:])
@@ -222,8 +265,39 @@ class NetworkWindow(QWidget):
         if not file_path:
             self.gatn_setting['iscondition'] = 0
             return
-        mat_data = loadmat(file_path, squeeze_me=True, struct_as_record=False)
-        window_condition = mat_data.get('window_condition', None)
+        
+        try:
+            # First try to load with scipy.io.loadmat (for older MATLAB formats)
+            mat_data = loadmat(file_path, squeeze_me=True, struct_as_record=False)
+            window_condition = mat_data.get('window_condition', None)
+        except NotImplementedError:
+            # If that fails, try h5py for MATLAB v7.3 files
+            print("Detected MATLAB v7.3 format, using HDF5 reader...")
+            try:
+                import h5py
+                with h5py.File(file_path, 'r') as f:
+                    # Navigate the HDF5 structure to find window_condition
+                    if 'window_condition' in f:
+                        # Create a simple object to hold the data
+                        class WindowCondition:
+                            pass
+                        window_condition = WindowCondition()
+                        
+                        # Read the fields we need
+                        wc_ref = f['window_condition']
+                        if 'dfnc_window_condi' in wc_ref:
+                            window_condition.dfnc_window_condi = np.array(wc_ref['dfnc_window_condi']).flatten()
+                        else:
+                            window_condition = None
+                    else:
+                        window_condition = None
+            except Exception as hdf5_error:
+                QMessageBox.critical(self, "Error", f"Failed to load HDF5 file: {hdf5_error}")
+                return
+        except Exception as general_error:
+            QMessageBox.critical(self, "Error", f"Failed to load file: {general_error}")
+            return
+        
         if window_condition is None:
             QMessageBox.warning(self, "Error", "'window_condition' not found in file.")
             return
@@ -309,8 +383,45 @@ class NetworkWindow(QWidget):
 
         # Load first file for node info and window size
         first_file = os.path.join(self.gatn_setting['file_path_list'], self.gatn_setting['file_list'][0])
-        temp_feature = loadmat(first_file, squeeze_me=True, struct_as_record=False)
-        subj_data = temp_feature.get('subj_data', None)
+        try:
+            # First try to load with scipy.io.loadmat (for older MATLAB formats)
+            temp_feature = loadmat(first_file, squeeze_me=True, struct_as_record=False)
+            subj_data = temp_feature.get('subj_data', None)
+        except NotImplementedError:
+            # If that fails, try h5py for MATLAB v7.3 files
+            print("Detected MATLAB v7.3 format, using HDF5 reader...")
+            try:
+                with h5py.File(first_file, 'r') as f:
+                    # Create a simple object to hold the data
+                    class SubjData:
+                        pass
+                    subj_data = SubjData()
+                    
+                    # Navigate the HDF5 structure to find the data
+                    subj_data_ref = f['subj_data']
+                    if 'd_corr' in subj_data_ref:
+                        d_corr_ref = subj_data_ref['d_corr']
+                        # Read the data and transpose if needed (MATLAB vs Python array ordering)
+                        subj_data.d_corr = np.array(d_corr_ref).T  # Transpose to match MATLAB ordering
+                    
+                    if 'd_atlas_list' in subj_data_ref:
+                        atlas_ref = subj_data_ref['d_atlas_list']
+                        # Handle string array conversion
+                        if atlas_ref.dtype.kind == 'O':  # Object array (cell array in MATLAB)
+                            atlas_list = []
+                            for i in range(atlas_ref.shape[0]):
+                                ref = atlas_ref[i, 0]
+                                atlas_list.append(''.join(chr(c) for c in f[ref][:].flatten()))
+                            subj_data.d_atlas_list = np.array(atlas_list)
+                        else:
+                            subj_data.d_atlas_list = np.array(atlas_ref).flatten()
+            except Exception as hdf5_error:
+                QMessageBox.critical(self, "Error", f"Failed to load HDF5 file: {hdf5_error}")
+                return
+        except Exception as general_error:
+            QMessageBox.critical(self, "Error", f"Failed to load file: {general_error}")
+            return
+        
         if subj_data is None:
             QMessageBox.warning(self, "Error", "subj_data not found in first file.")
             return
@@ -403,7 +514,33 @@ class NetworkWindow(QWidget):
                 break
             file_path = os.path.join(self.gatn_setting['file_path_list'], file_name)
             print(f'[DEBUG] Loading file: {file_name}')
-            temp_feature = loadmat(file_path, squeeze_me=True, struct_as_record=False)
+            try:
+                # First try to load with scipy.io.loadmat (for older MATLAB formats)
+                temp_feature = loadmat(file_path, squeeze_me=True, struct_as_record=False)
+                subj_data = temp_feature.get('subj_data', None)
+            except NotImplementedError:
+                # If that fails, try h5py for MATLAB v7.3 files
+                print("Detected MATLAB v7.3 format, using HDF5 reader...")
+                try:
+                    with h5py.File(file_path, 'r') as f:
+                        # Create a simple object to hold the data
+                        class SubjData:
+                            pass
+                        subj_data = SubjData()
+                        
+                        # Navigate the HDF5 structure to find the data
+                        subj_data_ref = f['subj_data']
+                        if 'd_corr' in subj_data_ref:
+                            d_corr_ref = subj_data_ref['d_corr']
+                            # Read the data and transpose if needed (MATLAB vs Python array ordering)
+                            subj_data.d_corr = np.array(d_corr_ref).T  # Transpose to match MATLAB ordering
+                except Exception as hdf5_error:
+                    print(f"[ERROR] Failed to load HDF5 file {file_name}: {hdf5_error}")
+                    continue
+            except Exception as general_error:
+                print(f"[ERROR] Failed to load file {file_name}: {general_error}")
+                continue
+                
             if subj_data is None:
                 print('[DEBUG] subj_data not found, skipping file')
                 continue
