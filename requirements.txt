@@ -7,5 +7,5 @@ matplotlib
 joblib
 bctpy
 nibabel
-pywt
+PyWavelets
 nilearn

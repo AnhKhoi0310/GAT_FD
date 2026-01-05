@@ -503,8 +503,8 @@ class ProcessWindow(QWidget):
             if self.file_format_dropdown.currentIndex() == 0:
                 # Load NIfTI with memory mapping
                 func_img = nib.load(file_path, mmap=True)
-                func_data = func_img.get_fdata()
-                fnc_raw_len = func_data.shape[3]
+                num_timepoints = func_img.shape[3]
+                fnc_raw_len = num_timepoints
                 fnc_window_count = fnc_raw_len - fnc_window_size + 1
 
                 # --- Resample atlas to match functional image (MATLAB-style) ---
@@ -513,21 +513,22 @@ class ProcessWindow(QWidget):
                 else:
                     atlas_nib = nib.Nifti1Image(atlas_img, func_img.affine)
                 atlas_data = atlas_nib.get_fdata()
-                func_data = func_img.get_fdata()
+                
+                # Load first volume only for resampling setup
+                func_first_vol = func_img.dataobj[..., 0].astype(np.float32)
                 
                 # CRITICAL: Ensure same data type as MATLAB (single precision)
                 atlas_data = atlas_data.astype(np.float32)  # MATLAB uses 'single' (float32)
-                func_data = func_data.astype(np.float32)    # MATLAB uses 'single' (float32)
                 
                 atlas_affine = atlas_nib.affine
                 func_affine = func_img.affine
                 # Get voxel sizes
                 atlas_voxel_size = atlas_nib.header.get_zooms()[:3]
                 func_voxel_size = func_img.header.get_zooms()[:3]
-                func_phys_dims = np.array(func_data.shape[:3]) * np.array(func_voxel_size)
+                func_phys_dims = np.array(func_img.shape[:3]) * np.array(func_voxel_size)
                 expected_output_shape = tuple(int(np.ceil(dim / voxel)) for dim, voxel in zip(func_phys_dims, atlas_voxel_size))
                 
-                fnc_rawdata_t = func_data[..., 0].copy() 
+                fnc_rawdata_t = func_first_vol.copy() 
                 
                 # --- Use MATLAB imwarp to match MATLAB processing exactly ---
                 def fix_affine_for_matlab(aff):
@@ -544,7 +545,7 @@ class ProcessWindow(QWidget):
 
                     try:
                         # Convert data to MATLAB format
-                        func_data_matlab = matlab.double(func_data[:, :, :, 0].tolist())
+                        func_data_matlab = matlab.double(func_first_vol.tolist())
                         atlas_data_matlab = matlab.double(atlas_data.tolist())
 
                         # --- Fix affines for MATLAB ---
@@ -636,18 +637,20 @@ class ProcessWindow(QWidget):
                     return results
                 indices = get_matlab_style_indices(fnc_rawdata_tt.shape, atlas_data.shape)
                 
-                resampled_func = np.zeros(expected_output_shape + (func_data.shape[3],), dtype=func_data.dtype)
+                resampled_func = np.zeros(expected_output_shape + (num_timepoints,), dtype=np.float32)
                 
                 if self.eng is not None:
-                    print(f"Processing all {func_data.shape[3]} timepoints with MATLAB imwarp...")
+                    print(f"Processing all {num_timepoints} timepoints with MATLAB imwarp...")
                     
                     try:
-                        for t in range(func_data.shape[3]):
+                        for t in range(num_timepoints):
                             if t % 10 == 0:  # Progress indicator
-                                print(f"  Processing timepoint {t+1}/{func_data.shape[3]}")
+                                print(f"  Processing timepoint {t+1}/{num_timepoints}")
                             
+                            # Load current timepoint
+                            func_vol = func_img.dataobj[..., t].astype(np.float32)
                             # Convert current timepoint to MATLAB format
-                            func_vol_matlab = matlab.double(func_data[:, :, :, t].tolist())
+                            func_vol_matlab = matlab.double(func_vol.tolist())
                             self.eng.workspace['func_vol'] = func_vol_matlab
                             # Apply two-step transformation using MATLAB imwarp
                             # Step 1: Apply functional transform (unchanged shape like MATLAB)
@@ -677,7 +680,7 @@ class ProcessWindow(QWidget):
                 # Use the original atlas shape as the target (exactly like MATLAB)
                 target_shape = atlas_data.shape  
                 # Initialize output arrays with exact target shape (original atlas shape)
-                final_func = np.zeros(target_shape + (func_data.shape[3],), dtype=resampled_func.dtype)
+                final_func = np.zeros(target_shape + (num_timepoints,), dtype=resampled_func.dtype)
                 final_atlas = resampled_atlas  # Use original atlas directly (no cropping needed)
                 
                 axs = indices.get('axxs', 1) - 1  # Convert start to 0-based
