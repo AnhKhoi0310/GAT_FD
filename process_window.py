@@ -7,7 +7,7 @@ from scipy.ndimage import affine_transform
 from scipy.io import savemat, loadmat
 from scipy.signal import butter, filtfilt
 from PyQt6.QtWidgets import QWidget, QLabel,QComboBox, QFileDialog, QPushButton, QListWidget, QProgressDialog,QLineEdit, QFormLayout, QMessageBox
-from PyQt6.QtGui import QIntValidator 
+from PyQt6.QtGui import QIntValidator, QDoubleValidator 
 from nilearn.input_data import NiftiLabelsMasker
 from nilearn.image import resample_to_img
 import matlab.engine
@@ -38,7 +38,7 @@ class ProcessWindow(QWidget):
         'atlas_type': 0,
         'atlas_list': [],
         'atlas_path': [],
-        'TR' : 1,
+        'TR' : 1.0,
         'window_size': 20,
         'step_size': 1,
         'filter_type': 0,
@@ -50,7 +50,10 @@ class ProcessWindow(QWidget):
 
     # Update parameters from field
     def parameters_update_setting(self):
-        self.settings['TR'] = int(self.TRs_input.text()) if self.TRs_input.text().isdigit() else 1
+        try:
+            self.settings['TR'] = float(self.TRs_input.text())
+        except ValueError:
+            self.settings['TR'] = 1.0
         self.settings['window_size'] = int(self.window_size_input.text()) if self.window_size_input.text().isdigit() else 20
         self.settings['step_size'] = int(self.step_size_input.text()) if self.step_size_input.text().isdigit() else 1
         self.settings['filter_type'] = self.filter_input.currentIndex()
@@ -75,7 +78,7 @@ class ProcessWindow(QWidget):
         except (ValueError, TypeError):
             self.atlas_list_widget.setCurrentRow(0)
 
-        self.TRs_input.setText(str(self.settings.get('TR', 1)))
+        self.TRs_input.setText(str(self.settings.get('TR', 1.0)))
         self.window_size_input.setText(str(self.settings.get('window_size', 20)))
         self.step_size_input.setText(str(self.settings.get('step_size', 1)))
         self.filter_input.setCurrentIndex(self.settings.get('filter_type', 0))
@@ -311,8 +314,8 @@ class ProcessWindow(QWidget):
 
         # TRs input
         self.TRs_input = QLineEdit()
-        self.TRs_input.setValidator(QIntValidator())
-        self.TRs_input.setText("1")
+        self.TRs_input.setValidator(QDoubleValidator())
+        self.TRs_input.setText("1.0")
         self.layout.addRow("TR(s)", self.TRs_input )
 
         # Window Size input
