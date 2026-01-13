@@ -565,7 +565,11 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                     disp('Func array shape:');
                     disp(size(fnc_rawdata));
                     %disp(fnc_rawdata_len);
-                    fnc_window_count=fnc_rawdata_len-fnc_window_size+1;
+                    if fnc_window_size >= fnc_rawdata_len
+                        fnc_window_count = 1;
+                    else
+                        fnc_window_count=fnc_rawdata_len-fnc_window_size+1;
+                    end
                     % Print voxel size and orientation info for atlas
                     disp('Atlas voxel size:');
                     disp(fnc_pro_atlas_info.PixelDimensions);
@@ -869,7 +873,11 @@ classdef gatfd_ui_process < matlab.apps.AppBase
                     atlased_data=temp_data{1};
                     
                     fnc_rawdata_len=size(atlased_data,4);
-                    fnc_window_count=fnc_rawdata_len-fnc_window_size+1;
+                    if fnc_window_size >= fnc_rawdata_len
+                        fnc_window_count = 1;
+                    else
+                        fnc_window_count=fnc_rawdata_len-fnc_window_size+1;
+                    end
                 end
                 
                 process_d.Value=(i-0.6)/fnc_pro_filelength;
