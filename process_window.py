@@ -508,10 +508,7 @@ class ProcessWindow(QWidget):
                 func_img = nib.load(file_path, mmap=True)
                 num_timepoints = func_img.shape[3]
                 fnc_raw_len = num_timepoints
-                if fnc_window_size >= fnc_raw_len:
-                    fnc_window_count = 1
-                else:
-                    fnc_window_count = fnc_raw_len - fnc_window_size + 1
+                fnc_window_count = fnc_raw_len - fnc_window_size + 1
 
                 # --- Resample atlas to match functional image (MATLAB-style) ---
                 if isinstance(atlas_img, str):
@@ -731,10 +728,7 @@ class ProcessWindow(QWidget):
                 key = next(k for k in mat if not k.startswith('__'))
                 atlased_data = mat[key].astype(np.float64)
                 fnc_raw_len, _ = atlased_data.shape
-                if fnc_window_size >= fnc_raw_len:
-                    fnc_window_count = 1
-                else:
-                    fnc_window_count = fnc_raw_len - fnc_window_size + 1
+                fnc_window_count = fnc_raw_len - fnc_window_size + 1
                 atl_len = atlased_data.shape[1]
 
             progress_dialog.setValue(i+1)
