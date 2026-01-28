@@ -429,7 +429,14 @@ class NetworkWindow(QWidget):
         node_list = d_atlas_list.tolist()
         data_num_nodes = len(node_list)
         d_corr = subj_data.d_corr
-        data_window_size = d_corr.shape[0]
+        
+        # Determine the number of windows based on data dimensionality
+        # If d_corr is 2D (nodes x nodes): static analysis with 1 window
+        # If d_corr is 3D (time x nodes x nodes): dynamic analysis with multiple windows
+        if d_corr.ndim == 2:
+            data_window_size = 1
+        else:
+            data_window_size = d_corr.shape[0]
 
         # Threshold list
         dnet_data_threshold_list = np.arange(threshold_lower, threshold_upper + threshold_step/2, threshold_step)
