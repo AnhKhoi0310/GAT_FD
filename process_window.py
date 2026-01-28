@@ -501,7 +501,23 @@ class ProcessWindow(QWidget):
         progress_dialog.show()
 
         for i in range(fnc_pro_filelength):
-            file_path = os.path.join(self.settings['file_path'][i], self.settings['file_list'][i])
+            # Robustly determine the full input file path.
+            # Users may have settings['file_list'] containing either absolute paths or just filenames
+            file_entry = self.settings['file_list'][i]
+            # If the entry is an absolute path that exists, use it directly.
+            if isinstance(file_entry, str) and os.path.isabs(file_entry) and os.path.exists(file_entry):
+                file_path = file_entry
+            else:
+                # Otherwise, try to find the corresponding directory in settings['file_path'].
+                dir_path = ''
+                fp = self.settings.get('file_path', [])
+                if isinstance(fp, list):
+                    dir_path = fp[i] if i < len(fp) else ''
+                elif isinstance(fp, str):
+                    dir_path = fp
+                file_path = os.path.join(dir_path, file_entry)
+            # Use the basename of the input file for naming outputs (prevents absolute paths overriding output dir)
+            out_basename = os.path.splitext(os.path.basename(file_path))[0]
 
             if self.file_format_dropdown.currentIndex() == 0:
                 # Load NIfTI with memory mapping
@@ -927,8 +943,8 @@ class ProcessWindow(QWidget):
                 'd_kernel': self.settings['kernel'],
                 'd_atlas_list': self.settings['atlas_list']
             }
-            fname = os.path.splitext(self.settings['file_list'][i])[0]
-            savemat(os.path.join(fnc_out_path, f"{fname}.mat"), {'subj_data': subj_data}, format='5', do_compression=True)
+            # Save using the output folder selected by the user and the input file's basename
+            savemat(os.path.join(fnc_out_path, f"{out_basename}.mat"), {'subj_data': subj_data}, format='5', do_compression=True)
             progress_dialog.setLabelText(f"{i+1}/{fnc_pro_filelength}: Done")
 
         # Close dialog and notify completion
