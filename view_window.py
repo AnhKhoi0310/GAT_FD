@@ -281,13 +281,30 @@ class ViewWindow(QWidget    ):
                 # Python equivalent: range(data_length_diff, data_length_diff + data_frame_length) but using MATLAB 1-based indexing convention
                 x_range = np.arange(data_length_diff, data_length_diff + data_frame_length)  # MATLAB: data_length_diff:data_length_diff-1+data_frame_length
                 print(f"Left plot x_range: {x_range[:5]}...{x_range[-5:]} (length={len(x_range)})")
-                
+
+                # Ensure temp_data is a 1-D numpy array
+                temp_data = np.asarray(temp_data).flatten()
+                # Strict behavior: only allow plotting when temp_data is scalar (expand) or matches x_range length
+                if temp_data.size == len(x_range):
+                    # perfect match
+                    pass
+                elif temp_data.size == 1:
+                    # Expand scalar to match x_range (MATLAB displays scalar as constant line)
+                    print("temp_data is scalar — expanding to match x_range length")
+                    temp_data = np.full(len(x_range), float(temp_data))
+                else:
+                    # Dimensions mismatch: show error and abort plotting to match MATLAB-like strict behavior
+                    msg = f"x and y must have same first dimension, but have shapes ({len(x_range)},) and ({temp_data.size},)"
+                    print(msg)
+                    QMessageBox.critical(self, "Error", msg)
+                    return
+
                 self.timeseries_ax.plot(x_range, temp_data, 'b', linewidth=2, label='Network Property')
                 self.timeseries_ax.relim()  # Recalculate limits
                 self.timeseries_ax.autoscale_view()  # Auto-scale the view (equivalent to MATLAB ylim('auto'))
                 self.timeseries_ax.set_ylabel('Network Measure', color='b')
                 self.timeseries_ax.tick_params(axis='y', labelcolor='b')
-                
+
                 # MATLAB: yyaxis(app.UIAxes_Timeseries,'right');
                 # MATLAB: plot(app.UIAxes_Timeseries,1:app.gatv_data.data_length,app.gatv_setting.condition.dfnc_reponse,'--r','LineWidth',2);
                 timeseries_ax_right = self.timeseries_ax.twinx()
