@@ -593,14 +593,6 @@ class NetworkWindow(QWidget):
             mat_dict['dnet_data_data_mat_nodal'] = dnet_data_data_mat_nodal
         sio.savemat(out_mat_path, mat_dict, do_compression=True)
 
-        # Optionally save CSV if condition is loaded
-        if self.gatn_setting['iscondition'] == 1:
-            # Example: flatten and save global measures
-            if run_if_glob:
-                flat_global = dnet_data_data_mat_global.reshape(-1, dnet_data_data_mat_global.shape[-1])
-                df_global = pd.DataFrame(flat_global)
-                df_global.to_csv(out_file, index=False)
-
         progress.close()
         QMessageBox.information(self, "Finished", "Network calculation finished.")
 
