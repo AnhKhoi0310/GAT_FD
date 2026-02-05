@@ -373,13 +373,13 @@ class NetworkWindow(QWidget):
             return
         threshold_method = self.dropdown_method.currentIndex()  # 0:Absolute, 1:Proportional, 2:Cost
         threshold_absolute = int(self.cb_absolute.isChecked())
-        parallel = int(self.cb_parallel.isChecked())
+        # parallel = int(self.cb_parallel.isChecked())
         self.gatn_setting['threshold_lower'] = threshold_lower
         self.gatn_setting['threshold_upper'] = threshold_upper
         self.gatn_setting['threshold_step'] = threshold_step
         self.gatn_setting['threshold_method'] = threshold_method
         self.gatn_setting['threshold_absolute'] = threshold_absolute
-        self.gatn_setting['parallel'] = parallel
+        # self.gatn_setting['parallel'] = parallel
 
         # Load first file for node info and window size
         first_file = os.path.join(self.gatn_setting['file_path_list'], self.gatn_setting['file_list'][0])
@@ -611,7 +611,7 @@ class NetworkWindow(QWidget):
             'threshold_step': 0.02,
             'threshold_method': 1,  # 0:cost, 1:absolute, 2:relative
             'threshold_absolute': 0,
-            'parallel': 0,
+            # 'parallel': 0,
             'file_list': [],
             'file_path_list': [],
             'condition' : [],
@@ -773,8 +773,8 @@ class NetworkWindow(QWidget):
         layout.addWidget(self.group_nodal, 7, 0, 1, 2)
 
         # --- Run in parallel and Calculate button ---
-        self.cb_parallel = QCheckBox('Run in parallel', self)
-        layout.addWidget(self.cb_parallel, 8, 0)
+        # self.cb_parallel = QCheckBox('Run in parallel', self)
+        # layout.addWidget(self.cb_parallel, 8, 0)
         self.button_calculate = QPushButton('Calculate Network Properties', self)
         self.button_calculate.clicked.connect(self.gatn_run)
         layout.addWidget(self.button_calculate, 8, 1)
